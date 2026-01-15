@@ -1,13 +1,12 @@
 import threading
 import telebot
 
-from bot.config import BOT_TOKEN, PORT
-from web.server import app
-from bot.handlers.start import register_start
+from .config import BOT_TOKEN, PORT
+from .handlers.start import register_start
+from web.server import app   # web is outside bot → absolute is OK
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# Register handlers
 register_start(bot)
 
 def run_web():
