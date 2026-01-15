@@ -4,12 +4,14 @@ import telebot
 from config import BOT_TOKEN, PORT
 from server import app
 from start import register_start
+from upload import register_upload
 
 # Create bot instance
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 # Register handlers (more will be added later)
 register_start(bot)
+register_upload(bot)
 
 def run_web():
     """
