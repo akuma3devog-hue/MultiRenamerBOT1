@@ -10,15 +10,13 @@ def register_upload(bot):
 
         user = get_user(user_id)
         if not user:
-            bot.reply_to(message, "❌ Use /start first.")
-            return
+            return  # user must /start first
 
         files = user.get("files", [])
         if len(files) >= MAX_FILES:
             bot.reply_to(
                 message,
-                f"❌ Batch limit reached ({MAX_FILES} files).\n"
-                "Use <code>/process</code> or <code>/start</code>.",
+                f"❌ Batch limit reached ({MAX_FILES} files).",
                 parse_mode="HTML"
             )
             return
@@ -26,21 +24,22 @@ def register_upload(bot):
         # Detect file type
         if message.content_type == "document":
             file = message.document
-            file_type = "document"
             file_name = file.file_name
+            file_type = "document"
         else:
             file = message.video
-            file_type = "video"
             file_name = file.file_name or "video.mp4"
+            file_type = "video"
 
-        # Store file info (order preserved)
+        # Save file
         add_file(user_id, {
             "file_id": file.file_id,
             "file_name": file_name,
             "type": file_type
         })
 
-        total = len(files) + 1
+        # 🔥 IMPORTANT: re-fetch file list AFTER insert
+        total = len(get_files(user_id))
 
         bot.reply_to(
             message,
