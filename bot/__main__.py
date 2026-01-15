@@ -3,7 +3,7 @@ import telebot
 
 from .config import BOT_TOKEN, PORT
 from .handlers.start import register_start
-from web.server import app   # web is outside bot → absolute is OK
+from web.server import app
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
