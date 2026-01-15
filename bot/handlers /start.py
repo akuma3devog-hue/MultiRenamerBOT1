@@ -7,10 +7,8 @@ def register_start(bot):
     def start_handler(message):
         user_id = message.from_user.id
 
-        # Reset any old batch
         delete_user(user_id)
 
-        # Create new batch
         save_user({
             "user_id": user_id,
             "files": [],
@@ -23,9 +21,6 @@ def register_start(bot):
             message,
             "✅ <b>Batch started!</b>\n\n"
             "📂 Send up to <b>30 files</b>\n"
-            "🎥 Videos or 📄 Documents\n\n"
-            "When ready, use:\n"
-            "<code>/rename</code> → set format\n"
-            "<code>/process</code> → apply changes",
+            "🎥 Videos or 📄 Documents",
             parse_mode="HTML"
         )
