@@ -1,7 +1,10 @@
-from flask import Flask
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
-    return "OK", 200
+    """
+    Health check endpoint for Render & UptimeRobot
+    """
+    return jsonify(status="ok"), 200
