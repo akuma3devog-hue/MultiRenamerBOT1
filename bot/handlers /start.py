@@ -1,5 +1,5 @@
 from telebot import types
-from bot.database.mongo import save_user, delete_user
+from ..database.mongo import save_user, delete_user
 
 def register_start(bot):
 
