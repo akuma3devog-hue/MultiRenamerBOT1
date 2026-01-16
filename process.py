@@ -17,7 +17,10 @@ def register_process(bot):
             bot.reply_to(message, "❌ Use /start first.")
             return
 
-        files = get_files(user_id)
+        files = sorted(
+    get_files(user_id),
+    key=lambda f: f.get("message_id", 0)
+        )
         if not files:
             bot.reply_to(message, "❌ No files to process.")
             return
