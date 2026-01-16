@@ -5,7 +5,8 @@ import time
 import tempfile
 from mongo import get_files, get_rename, cleanup_user
 
-BAR_LENGTH = 20  # number of blocks in bar
+BAR_LENGTH = 20
+SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 
 def extract_episode(filename):
     m = re.search(r"[Ee](\d+)", filename)
@@ -47,7 +48,7 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        # ✅ FINAL SAFE SORT
+        # ✅ SAFE SORT (DO NOT TOUCH)
         files.sort(
             key=lambda f: (
                 extract_episode(f["file_name"]) is None,
@@ -63,17 +64,31 @@ def register_process(bot):
             chat_id,
             f"🚀 Processing files…\n"
             f"{make_bar(0, total)}\n"
-            f"0 / {total} (0%)\n"
+            f"0 / {total}\n"
             f"ETA: calculating…"
         )
 
         for idx, file in enumerate(files, start=1):
+            spinner = SPINNER[idx % len(SPINNER)]
+
+            # 🔔 PRE-UPDATE (SHOW ACTIVITY)
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg.message_id,
+                text=(
+                    f"🚀 Processing files… {spinner}\n"
+                    f"📄 Now processing:\n{file['file_name']}\n\n"
+                    f"{make_bar(idx-1, total)}\n"
+                    f"{idx-1} / {total}"
+                )
+            )
+
             ep_no = episode + (idx - 1)
             ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
             new_name = f"{base} S{season}E{ep_str}"
             new_filename = f"{new_name}.mkv"
 
-            # 🔽 DOWNLOAD (SERVER SIDE)
+            # 🔽 DOWNLOAD (SERVER)
             info = bot.get_file(file["file_id"])
             data = bot.download_file(info.file_path)
 
@@ -81,7 +96,7 @@ def register_process(bot):
                 tmp.write(data)
                 tmp_path = tmp.name
 
-            # 🔼 REUPLOAD WITH REAL FILENAME
+            # 🔼 REUPLOAD (REAL RENAME)
             with open(tmp_path, "rb") as f:
                 bot.send_document(
                     chat_id=chat_id,
@@ -91,10 +106,11 @@ def register_process(bot):
 
             os.remove(tmp_path)
 
-            # 📊 UPDATE PROGRESS BAR
+            # 📊 POST-UPDATE (PROGRESS ADVANCE)
             elapsed = time.time() - start_time
             avg = elapsed / idx
             remaining = avg * (total - idx)
+
             percent = int((idx / total) * 100)
 
             bot.edit_message_text(
@@ -108,7 +124,7 @@ def register_process(bot):
                 )
             )
 
-            time.sleep(0.8)  # flood-safe
+            time.sleep(0.7)  # flood-safe
 
         cleanup_user(user_id)
 
@@ -120,4 +136,4 @@ def register_process(bot):
                 f"{make_bar(total, total)}\n"
                 f"{total} / {total} (100%)"
             )
-        )
+                )
