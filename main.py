@@ -20,12 +20,11 @@ def run_web():
     app.run(host="0.0.0.0", port=PORT)
 
 def run_bot():
-    """
-    Telegram bot polling loop
-    """
     print("🤖 Bot started polling...")
-    bot.infinity_polling(skip_pending=True)
-
+    try:
+        bot.infinity_polling(skip_pending=True)
+    except Exception as e:
+        print("❌ Polling stopped:", e)
 if __name__ == "__main__":
     # Run Flask server in background thread
     threading.Thread(target=run_web, daemon=True).start()
