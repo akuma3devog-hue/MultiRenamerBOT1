@@ -5,15 +5,10 @@ from mongo import (
     cleanup_user
 )
 
-def extract_episode(filename: str) -> int:
-    """
-    Extract episode number from filename
-    Examples:
-    S1E02 → 2
-    E12 → 12
-    """
-    match = re.search(r"[Ee](\d+)", filename)
-    return int(match.group(1)) if match else 0
+def extract_episode(filename):
+    import re
+    m = re.search(r"[Ee](\d+)", filename)
+    return int(m.group(1)) if m else None
 
 
 def register_process(bot):
@@ -39,7 +34,13 @@ def register_process(bot):
         zero_pad = rename["zero_pad"]
 
         # 🔥 SORT FILES BY EPISODE NUMBER
-        files.sort(key=lambda f: extract_episode(f["file_name"]))
+        files.sort(
+    key=lambda f: (
+        extract_episode(f["file_name"]) is None,
+        extract_episode(f["file_name"]) or 0,
+        f["upload_index"]
+    )
+        )
 
         bot.send_message(chat_id, f"🚀 Processing {len(files)} files...")
 
