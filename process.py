@@ -12,6 +12,19 @@ def extract_episode(filename):
     return int(m.group(1)) if m else None
 
 
+def format_eta(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    secs = seconds % 60
+    return f"{minutes}m {secs}s"
+
+
+def make_bar(percent: int, length: int = 20) -> str:
+    filled = int(length * percent / 100)
+    return "█" * filled + "░" * (length - filled)
+
+
 def register_process(bot):
 
     @bot.message_handler(commands=["process"])
@@ -45,15 +58,19 @@ def register_process(bot):
 
         total = len(files)
 
-        # 📊 PROGRESS MESSAGE (NEW)
+        # 📊 INITIAL PROGRESS MESSAGE
         progress_msg = bot.send_message(
             chat_id,
-            f"🚀 Processing files...\nProgress: 0 / {total} (0%)"
+            f"🚀 Processing files...\n"
+            f"{make_bar(0)}\n"
+            f"0 / {total} (0%)\n"
+            f"ETA: calculating…"
         )
+
+        start_time = time.time()
 
         for idx, file in enumerate(files, start=1):
             ep_no = episode + (idx - 1)
-
             ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
             new_name = f"{base} S{season}E{ep_str}"
 
@@ -72,23 +89,37 @@ def register_process(bot):
                     supports_streaming=True
                 )
 
-            # 📈 UPDATE PROGRESS (NEW)
+            # 📈 PROGRESS + ETA UPDATE
             percent = int((idx / total) * 100)
+            elapsed = time.time() - start_time
+            avg_per_file = elapsed / idx
+            remaining = int(avg_per_file * (total - idx))
+
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=progress_msg.message_id,
-                text=f"🚀 Processing files...\nProgress: {idx} / {total} ({percent}%)"
+                text=(
+                    f"🚀 Processing files...\n"
+                    f"{make_bar(percent)}\n"
+                    f"{idx} / {total} ({percent}%)\n"
+                    f"ETA: {format_eta(remaining)}"
+                )
             )
 
-            # 🕒 FLOOD-SAFE DELAY (NEW)
+            # 🕒 FLOOD-SAFE DELAY (UNCHANGED)
             time.sleep(1.2)
 
         # 🧹 CLEANUP AFTER SUCCESS (UNCHANGED)
         cleanup_user(user_id)
 
-        # ✅ FINAL STATUS (UPDATED)
+        # ✅ FINAL MESSAGE
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=progress_msg.message_id,
-            text=f"✅ Batch completed successfully!\nProgress: {total} / {total} (100%)"
+            text=(
+                f"✅ Batch completed successfully!\n"
+                f"{make_bar(100)}\n"
+                f"{total} / {total} (100%)\n"
+                f"ETA: 0s"
+            )
         )
