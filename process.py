@@ -1,4 +1,6 @@
+# process.py
 import re
+import time
 from mongo import (
     get_files,
     get_rename,
@@ -6,7 +8,6 @@ from mongo import (
 )
 
 def extract_episode(filename):
-    import re
     m = re.search(r"[Ee](\d+)", filename)
     return int(m.group(1)) if m else None
 
@@ -33,19 +34,25 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        # 🔥 SORT FILES BY EPISODE NUMBER
+        # 🔥 SORT FILES (KEEPING YOUR LOGIC)
         files.sort(
-    key=lambda f: (
-        extract_episode(f["file_name"]) is None,
-        extract_episode(f["file_name"]) or 0,
-        f["upload_index"]
-    )
+            key=lambda f: (
+                extract_episode(f["file_name"]) is None,
+                extract_episode(f["file_name"]) or 0,
+                f["upload_index"]
+            )
         )
 
-        bot.send_message(chat_id, f"🚀 Processing {len(files)} files...")
+        total = len(files)
 
-        for idx, file in enumerate(files):
-            ep_no = episode + idx
+        # 📊 PROGRESS MESSAGE (NEW)
+        progress_msg = bot.send_message(
+            chat_id,
+            f"🚀 Processing files...\nProgress: 0 / {total} (0%)"
+        )
+
+        for idx, file in enumerate(files, start=1):
+            ep_no = episode + (idx - 1)
 
             ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
             new_name = f"{base} S{season}E{ep_str}"
@@ -65,7 +72,23 @@ def register_process(bot):
                     supports_streaming=True
                 )
 
-        # 🧹 CLEANUP AFTER SUCCESS
+            # 📈 UPDATE PROGRESS (NEW)
+            percent = int((idx / total) * 100)
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg.message_id,
+                text=f"🚀 Processing files...\nProgress: {idx} / {total} ({percent}%)"
+            )
+
+            # 🕒 FLOOD-SAFE DELAY (NEW)
+            time.sleep(1.2)
+
+        # 🧹 CLEANUP AFTER SUCCESS (UNCHANGED)
         cleanup_user(user_id)
 
-        bot.send_message(chat_id, "✅ Batch completed successfully!")
+        # ✅ FINAL STATUS (UPDATED)
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_msg.message_id,
+            text=f"✅ Batch completed successfully!\nProgress: {total} / {total} (100%)"
+        )
