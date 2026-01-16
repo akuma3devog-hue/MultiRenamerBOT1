@@ -14,21 +14,16 @@ users = db["users"]
 # ==================================================
 
 def reset_user(user_id: int):
-    """
-    Completely remove user batch data
-    """
     users.delete_one({"user_id": user_id})
 
 
 def create_user(user_id: int):
-    """
-    Create a fresh batch state for the user
-    """
     users.update_one(
         {"user_id": user_id},
         {"$set": {
             "user_id": user_id,
             "files": [],
+            "file_count": 0,          # 🔥 ATOMIC COUNTER
             "rename": None,
             "thumbnail": None,
             "change_file_id": False,
@@ -39,44 +34,38 @@ def create_user(user_id: int):
 
 
 def get_user(user_id: int):
-    """
-    Get full user document
-    """
     return users.find_one({"user_id": user_id})
 
 
 # ==================================================
-# FILE HANDLING
+# FILE HANDLING (ATOMIC & SAFE)
 # ==================================================
 
 def add_file(user_id: int, file_data: dict):
     """
-    Add a file to the user's batch (order preserved)
+    Atomically add file + increment count
     """
     users.update_one(
         {"user_id": user_id},
-        {"$push": {"files": file_data}}
+        {
+            "$push": {"files": file_data},
+            "$inc": {"file_count": 1}
+        }
     )
 
 
+def get_file_count(user_id: int) -> int:
+    user = get_user(user_id)
+    if not user:
+        return 0
+    return user.get("file_count", 0)
+
+
 def get_files(user_id: int):
-    """
-    Get list of uploaded files for user
-    """
     user = get_user(user_id)
     if not user:
         return []
     return user.get("files", [])
-
-
-def clear_files(user_id: int):
-    """
-    Clear all files after /process
-    """
-    users.update_one(
-        {"user_id": user_id},
-        {"$set": {"files": []}}
-    )
 
 
 # ==================================================
@@ -84,15 +73,6 @@ def clear_files(user_id: int):
 # ==================================================
 
 def set_rename(user_id: int, rename_data: dict):
-    """
-    Save rename pattern:
-    {
-        base: str,
-        season: int,
-        episode: int,
-        zero_pad: bool
-    }
-    """
     users.update_one(
         {"user_id": user_id},
         {"$set": {"rename": rename_data}}
@@ -100,9 +80,6 @@ def set_rename(user_id: int, rename_data: dict):
 
 
 def get_rename(user_id: int):
-    """
-    Get rename configuration
-    """
     user = get_user(user_id)
     if not user:
         return None
@@ -110,9 +87,6 @@ def get_rename(user_id: int):
 
 
 def clear_rename(user_id: int):
-    """
-    Remove rename config after /process
-    """
     users.update_one(
         {"user_id": user_id},
         {"$set": {"rename": None}}
@@ -124,9 +98,6 @@ def clear_rename(user_id: int):
 # ==================================================
 
 def set_change_file_id(user_id: int, state: bool):
-    """
-    Enable or disable /changefileid
-    """
     users.update_one(
         {"user_id": user_id},
         {"$set": {"change_file_id": state}}
@@ -134,9 +105,6 @@ def set_change_file_id(user_id: int, state: bool):
 
 
 def get_change_file_id(user_id: int) -> bool:
-    """
-    Get /changefileid state
-    """
     user = get_user(user_id)
     if not user:
         return False
@@ -148,13 +116,11 @@ def get_change_file_id(user_id: int) -> bool:
 # ==================================================
 
 def cleanup_user(user_id: int):
-    """
-    Reset batch but keep user document
-    """
     users.update_one(
         {"user_id": user_id},
         {"$set": {
             "files": [],
+            "file_count": 0,
             "rename": None,
             "thumbnail": None,
             "change_file_id": False
