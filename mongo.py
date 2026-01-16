@@ -1,4 +1,4 @@
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 import os
 from datetime import datetime
 
@@ -23,7 +23,7 @@ def create_user(user_id: int):
         {"$set": {
             "user_id": user_id,
             "files": [],
-            "file_count": 0,          # 🔥 ATOMIC COUNTER
+            "file_count": 0,
             "rename": None,
             "thumbnail": None,
             "change_file_id": False,
@@ -38,27 +38,26 @@ def get_user(user_id: int):
 
 
 # ==================================================
-# FILE HANDLING (ATOMIC & SAFE)
+# FILE HANDLING (🔥 SINGLE ATOMIC OPERATION)
 # ==================================================
 
-def add_file(user_id: int, file_data: dict):
+def add_file_and_get_count(user_id: int, file_data: dict) -> int:
     """
-    Atomically add file + increment count
+    Atomically:
+    - add file
+    - increment counter
+    - return updated counter
     """
-    users.update_one(
+    doc = users.find_one_and_update(
         {"user_id": user_id},
         {
             "$push": {"files": file_data},
             "$inc": {"file_count": 1}
-        }
+        },
+        return_document=ReturnDocument.AFTER
     )
 
-
-def get_file_count(user_id: int) -> int:
-    user = get_user(user_id)
-    if not user:
-        return 0
-    return user.get("file_count", 0)
+    return doc.get("file_count", 0) if doc else 0
 
 
 def get_files(user_id: int):
