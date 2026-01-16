@@ -1,4 +1,4 @@
-from mongo import get_user, add_file, get_files
+from mongo import get_user, add_file, get_file_count
 
 MAX_FILES = 30
 
@@ -10,10 +10,10 @@ def register_upload(bot):
 
         user = get_user(user_id)
         if not user:
-            return  # user must /start first
+            return  # must /start first
 
-        files = user.get("files", [])
-        if len(files) >= MAX_FILES:
+        count = user.get("file_count", 0)
+        if count >= MAX_FILES:
             bot.reply_to(
                 message,
                 f"❌ Batch limit reached ({MAX_FILES} files).",
@@ -31,15 +31,15 @@ def register_upload(bot):
             file_name = file.file_name or "video.mp4"
             file_type = "video"
 
-        # Save file
+        # 🔥 ATOMIC INSERT
         add_file(user_id, {
             "file_id": file.file_id,
             "file_name": file_name,
             "type": file_type
         })
 
-        # 🔥 IMPORTANT: re-fetch file list AFTER insert
-        total = len(get_files(user_id))
+        # 🔥 SAFE COUNT (NO RACE CONDITIONS)
+        total = get_file_count(user_id)
 
         bot.reply_to(
             message,
