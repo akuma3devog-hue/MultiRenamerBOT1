@@ -1,33 +1,36 @@
+import re
 from mongo import (
-    get_user,
     get_files,
     get_rename,
     cleanup_user
 )
 
+def extract_episode(filename: str) -> int:
+    """
+    Extract episode number from filename
+    Examples:
+    S1E02 → 2
+    E12 → 12
+    """
+    match = re.search(r"[Ee](\d+)", filename)
+    return int(match.group(1)) if match else 0
+
+
 def register_process(bot):
 
     @bot.message_handler(commands=["process"])
-    def process_handler(message):
+    def process_cmd(message):
         user_id = message.from_user.id
         chat_id = message.chat.id
 
-        user = get_user(user_id)
-        if not user:
-            bot.reply_to(message, "❌ Use /start first.")
-            return
-
-        files = sorted(
-    get_files(user_id),
-    key=lambda f: f.get("message_id", 0)
-        )
+        files = get_files(user_id)
         if not files:
             bot.reply_to(message, "❌ No files to process.")
             return
 
         rename = get_rename(user_id)
         if not rename:
-            bot.reply_to(message, "❌ Use /rename before /process.")
+            bot.reply_to(message, "❌ Use /rename first.")
             return
 
         base = rename["base"]
@@ -35,25 +38,23 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        bot.reply_to(message, "⚙️ Processing files…")
+        # 🔥 SORT FILES BY EPISODE NUMBER
+        files.sort(key=lambda f: extract_episode(f["file_name"]))
 
-        for file in files:
-            ep_num = str(episode).zfill(2) if zero_pad else str(episode)
-            new_name = f"{base} S{season}E{ep_num}"
+        bot.send_message(chat_id, f"🚀 Processing {len(files)} files...")
 
-            if file["file_name"].lower().endswith(".mkv"):
-                new_name += ".mkv"
-            elif file["file_name"].lower().endswith(".mp4"):
-                new_name += ".mp4"
-            else:
-                new_name += ""
+        for idx, file in enumerate(files):
+            ep_no = episode + idx
+
+            ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
+            new_name = f"{base} S{season}E{ep_str}"
 
             if file["type"] == "document":
                 bot.send_document(
                     chat_id,
                     file["file_id"],
                     caption=new_name,
-                    visible_file_name=new_name
+                    file_name=f"{new_name}.mkv"
                 )
             else:
                 bot.send_video(
@@ -63,13 +64,7 @@ def register_process(bot):
                     supports_streaming=True
                 )
 
-            episode += 1
-
+        # 🧹 CLEANUP AFTER SUCCESS
         cleanup_user(user_id)
 
-        bot.send_message(
-            chat_id,
-            "✅ <b>Batch completed!</b>\n\n"
-            "You can start a new batch with /start",
-            parse_mode="HTML"
-          )
+        bot.send_message(chat_id, "✅ Batch completed successfully!")
