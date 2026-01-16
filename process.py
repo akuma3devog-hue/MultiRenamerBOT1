@@ -1,7 +1,11 @@
 # process.py
 import re
 import time
-from mongo import get_files, get_rename, cleanup_user
+from mongo import (
+    get_files,
+    get_rename,
+    cleanup_user
+)
 
 def extract_episode(filename):
     m = re.search(r"[Ee](\d+)", filename)
@@ -30,7 +34,7 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        # 🔥 SORT (KEEP ORDER + EP LOGIC)
+        # 🔥 KEEP YOUR SORTING LOGIC
         files.sort(
             key=lambda f: (
                 extract_episode(f["file_name"]) is None,
@@ -41,7 +45,7 @@ def register_process(bot):
 
         total = len(files)
 
-        progress = bot.send_message(
+        progress_msg = bot.send_message(
             chat_id,
             f"🚀 Processing files...\n0 / {total} (0%)"
         )
@@ -50,30 +54,38 @@ def register_process(bot):
             ep_no = episode + (idx - 1)
             ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
 
-            new_name = f"{base} S{season}E{ep_str}.mkv"
+            new_name = f"{base} S{season}E{ep_str}"
+            new_filename = f"{new_name}.mkv"
 
-            # ✅ ALWAYS SEND AS DOCUMENT (THIS FIXES BLUE TITLE)
-            bot.send_document(
-                chat_id=chat_id,
-                document=file["file_id"],
-                caption=new_name,
-                file_name=new_name
-            )
+            if file["type"] == "document":
+                bot.send_document(
+                    chat_id=chat_id,
+                    document=file["file_id"],
+                    visible_file_name=new_filename,  # ✅ REAL FILE NAME
+                    caption=new_name
+                )
+            else:
+                bot.send_video(
+                    chat_id=chat_id,
+                    video=file["file_id"],
+                    caption=new_name,
+                    supports_streaming=True
+                )
 
             percent = int((idx / total) * 100)
 
             bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=progress.message_id,
+                message_id=progress_msg.message_id,
                 text=f"🚀 Processing files...\n{idx} / {total} ({percent}%)"
             )
 
-            time.sleep(1.2)  # flood safe
+            time.sleep(1.1)  # flood-safe
 
         cleanup_user(user_id)
 
         bot.edit_message_text(
             chat_id=chat_id,
-            message_id=progress.message_id,
-            text=f"✅ Batch completed!\n{total}/{total} (100%)"
-        )
+            message_id=progress_msg.message_id,
+            text=f"✅ Batch completed!\n{total} / {total} (100%)"
+    )
