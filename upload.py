@@ -32,10 +32,11 @@ def register_upload(bot):
 
         # 🔥 ONE DB CALL — NO RACE CONDITIONS
         total = add_file_and_get_count(user_id, {
-            "file_id": file.file_id,
-            "file_name": file_name,
-            "type": file_type
-        })
+    "file_id": file.file_id,
+    "file_name": file_name,
+    "type": file_type,
+    "message_id": message.message_id  # 🔥 ADD THIS
+})
 
         bot.reply_to(
             message,
