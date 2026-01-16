@@ -37,18 +37,17 @@ def register_rename(bot):
             ep_part = "S1E1"
 
         # Parse SxEy
-        match = re.search(r"S(\d+)E(\d+)", ep_part, re.IGNORECASE)
-        if not match:
-            bot.reply_to(
-                message,
-                "❌ Invalid episode format.\n"
-                "Use <code>S1E1</code>, <code>S2E15</code>, etc.",
-                parse_mode="HTML"
-            )
-            return
+        match = re.search(r"S(\d+)E(\d*)", ep_part, re.IGNORECASE)
+if not match:
+    bot.reply_to(
+        message,
+        "❌ Invalid format.\nUse: S1E, S1E1, S2E15",
+        parse_mode="HTML"
+    )
+    return
 
-        season = int(match.group(1))
-        episode = int(match.group(2))
+season = int(match.group(1))
+episode = int(match.group(2)) if match.group(2) else 1
 
         rename_data = {
             "base": base.strip(),
