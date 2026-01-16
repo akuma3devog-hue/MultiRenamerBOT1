@@ -1,24 +1,28 @@
 # process.py
 import re
+import os
 import time
+import tempfile
 from mongo import get_files, get_rename, cleanup_user
+
+BAR_LENGTH = 20  # number of blocks in bar
 
 def extract_episode(filename):
     m = re.search(r"[Ee](\d+)", filename)
     return int(m.group(1)) if m else None
 
 
-def format_eta(seconds: float) -> str:
+def make_bar(done, total):
+    filled = int((done / total) * BAR_LENGTH)
+    return "█" * filled + "░" * (BAR_LENGTH - filled)
+
+
+def format_eta(seconds):
     if seconds < 60:
         return f"{int(seconds)}s"
-    minutes = int(seconds // 60)
-    seconds = int(seconds % 60)
-    return f"{minutes}m {seconds}s"
-
-
-def build_bar(percent: int, length: int = 20) -> str:
-    filled = int(length * percent / 100)
-    return "█" * filled + "░" * (length - filled)
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    return f"{m}m {s}s"
 
 
 def register_process(bot):
@@ -43,7 +47,7 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        # 🔥 KEEP YOUR SORTING LOGIC
+        # ✅ FINAL SAFE SORT
         files.sort(
             key=lambda f: (
                 extract_episode(f["file_name"]) is None,
@@ -54,12 +58,11 @@ def register_process(bot):
 
         total = len(files)
         start_time = time.time()
-        last_edit = 0
 
         progress_msg = bot.send_message(
             chat_id,
-            f"🚀 Processing files...\n"
-            f"{build_bar(0)}\n"
+            f"🚀 Processing files…\n"
+            f"{make_bar(0, total)}\n"
             f"0 / {total} (0%)\n"
             f"ETA: calculating…"
         )
@@ -70,45 +73,42 @@ def register_process(bot):
             new_name = f"{base} S{season}E{ep_str}"
             new_filename = f"{new_name}.mkv"
 
-            if file["type"] == "document":
+            # 🔽 DOWNLOAD (SERVER SIDE)
+            info = bot.get_file(file["file_id"])
+            data = bot.download_file(info.file_path)
+
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = tmp.name
+
+            # 🔼 REUPLOAD WITH REAL FILENAME
+            with open(tmp_path, "rb") as f:
                 bot.send_document(
                     chat_id=chat_id,
-                    document=file["file_id"],
-                    visible_file_name=new_filename,
-                    caption=new_name
-                )
-            else:
-                bot.send_video(
-                    chat_id=chat_id,
-                    video=file["file_id"],
-                    caption=new_name,
-                    supports_streaming=True
+                    document=f,
+                    visible_file_name=new_filename
                 )
 
-            # ---------- PROGRESS UPDATE ----------
-            now = time.time()
+            os.remove(tmp_path)
 
-            # update only every ~1.2s to avoid spam
-            if now - last_edit >= 1.2 or idx == total:
-                elapsed = now - start_time
-                avg_per_file = elapsed / idx
-                remaining = avg_per_file * (total - idx)
+            # 📊 UPDATE PROGRESS BAR
+            elapsed = time.time() - start_time
+            avg = elapsed / idx
+            remaining = avg * (total - idx)
+            percent = int((idx / total) * 100)
 
-                percent = int((idx / total) * 100)
-
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=progress_msg.message_id,
-                    text=(
-                        f"🚀 Processing files...\n"
-                        f"{build_bar(percent)}\n"
-                        f"{idx} / {total} ({percent}%)\n"
-                        f"ETA: {format_eta(remaining)}"
-                    )
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg.message_id,
+                text=(
+                    f"🚀 Processing files…\n"
+                    f"{make_bar(idx, total)}\n"
+                    f"{idx} / {total} ({percent}%)\n"
+                    f"ETA: {format_eta(remaining)}"
                 )
-                last_edit = now
+            )
 
-            time.sleep(0.8)  # flood-safe delay
+            time.sleep(0.8)  # flood-safe
 
         cleanup_user(user_id)
 
@@ -116,9 +116,8 @@ def register_process(bot):
             chat_id=chat_id,
             message_id=progress_msg.message_id,
             text=(
-                f"✅ Batch completed successfully!\n"
-                f"{build_bar(100)}\n"
-                f"{total} / {total} (100%)\n"
-                f"ETA: 0s"
+                f"✅ Completed!\n"
+                f"{make_bar(total, total)}\n"
+                f"{total} / {total} (100%)"
             )
         )
