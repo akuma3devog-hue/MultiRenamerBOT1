@@ -6,7 +6,7 @@ from server import app
 from start import register_start
 from upload import register_upload
 from process import register_process
-
+from rename import register_rename
 # Create bot instance
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
@@ -14,7 +14,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 register_start(bot)
 register_upload(bot)
 register_process(bot)
-
+register_rename(bot)
 def run_web():
     """
     Flask server for UptimeRobot / Render health check
