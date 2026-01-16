@@ -1,69 +1,52 @@
-import re
-from mongo import get_user, set_rename
+# rename.py
+from mongo import set_rename
 
 def register_rename(bot):
 
     @bot.message_handler(commands=["rename"])
-    def rename_handler(message):
+    def rename_cmd(message):
+        """
+        Usage:
+        /rename Naruto S1E
+        /rename Naruto S01E
+        """
         user_id = message.from_user.id
-        user = get_user(user_id)
+        parts = message.text.split(maxsplit=2)
 
-        if not user:
-            bot.reply_to(message, "❌ Use /start first.")
-            return
-
-        if not user.get("files"):
-            bot.reply_to(message, "❌ No files uploaded.")
-            return
-
-        # Remove command part
-        text = message.text.replace("/rename", "").strip()
-
-        if not text:
+        if len(parts) < 3:
             bot.reply_to(
                 message,
-                "❌ Usage:\n"
-                "<code>/rename Naruto S1E</code>\n"
-                "<code>/rename Naruto | S2E15</code>",
+                "❌ Usage:\n<code>/rename Naruto S1E</code>",
                 parse_mode="HTML"
             )
             return
 
-        # Split base name and episode pattern
-        if "|" in text:
-            base, ep_part = map(str.strip, text.split("|", 1))
-        else:
-            base = text
-            ep_part = "S1E1"
+        title = parts[1]
+        pattern = parts[2].upper()
 
-        # Parse SxEy
-        match = re.search(r"S(\d+)E(\d*)", ep_part, re.IGNORECASE)
-if not match:
-    bot.reply_to(
-        message,
-        "❌ Invalid format.\nUse: S1E, S1E1, S2E15",
-        parse_mode="HTML"
-    )
-    return
+        # Detect season & episode pattern
+        if "S" not in pattern or "E" not in pattern:
+            bot.reply_to(
+                message,
+                "❌ Invalid format. Use S1E or S01E",
+                parse_mode="HTML"
+            )
+            return
 
-season = int(match.group(1))
-episode = int(match.group(2)) if match.group(2) else 1
+        zero_pad = "01" in pattern
 
         rename_data = {
-            "base": base.strip(),
-            "season": season,
-            "episode": episode,
-            "zero_pad": True
+            "title": title,
+            "pattern": pattern,
+            "zero_pad": zero_pad
         }
 
         set_rename(user_id, rename_data)
 
         bot.reply_to(
             message,
-            f"✅ <b>Rename pattern set</b>\n\n"
-            f"<b>Base:</b> {base}\n"
-            f"<b>Season:</b> {season}\n"
-            f"<b>Starting Episode:</b> {str(episode).zfill(2)}\n\n"
-            f"Use <code>/process</code> to apply",
+            "✅ <b>Rename pattern saved!</b>\n\n"
+            f"📛 Title: <b>{title}</b>\n"
+            f"📐 Pattern: <b>{pattern}</b>",
             parse_mode="HTML"
         )
