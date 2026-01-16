@@ -1,8 +1,8 @@
 # process.py
 import re
-import os
 import time
 import tempfile
+import os
 from mongo import get_files, get_rename, cleanup_user
 
 BAR_LENGTH = 20
@@ -48,7 +48,7 @@ def register_process(bot):
         episode = rename["episode"]
         zero_pad = rename["zero_pad"]
 
-        # ✅ SAFE SORT (DO NOT TOUCH)
+        # ✅ FINAL SAFE ORDER
         files.sort(
             key=lambda f: (
                 extract_episode(f["file_name"]) is None,
@@ -71,7 +71,7 @@ def register_process(bot):
         for idx, file in enumerate(files, start=1):
             spinner = SPINNER[idx % len(SPINNER)]
 
-            # 🔔 PRE-UPDATE (SHOW ACTIVITY)
+            # 🔔 SHOW ACTIVITY BEFORE DOWNLOAD
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=progress_msg.message_id,
@@ -83,34 +83,32 @@ def register_process(bot):
                 )
             )
 
+            # ⚠️ HEAVY OPERATION (NO MESSAGE EDIT HERE)
+            info = bot.get_file(file["file_id"])
+            data = bot.download_file(info.file_path)
+
             ep_no = episode + (idx - 1)
             ep_str = f"{ep_no:02d}" if zero_pad else str(ep_no)
             new_name = f"{base} S{season}E{ep_str}"
             new_filename = f"{new_name}.mkv"
 
-            # 🔽 DOWNLOAD (SERVER)
-            info = bot.get_file(file["file_id"])
-            data = bot.download_file(info.file_path)
-
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
 
-            # 🔼 REUPLOAD (REAL RENAME)
             with open(tmp_path, "rb") as f:
                 bot.send_document(
-                    chat_id=chat_id,
+                    chat_id,
                     document=f,
                     visible_file_name=new_filename
                 )
 
             os.remove(tmp_path)
 
-            # 📊 POST-UPDATE (PROGRESS ADVANCE)
+            # 📊 UPDATE AFTER UPLOAD
             elapsed = time.time() - start_time
             avg = elapsed / idx
             remaining = avg * (total - idx)
-
             percent = int((idx / total) * 100)
 
             bot.edit_message_text(
@@ -124,7 +122,7 @@ def register_process(bot):
                 )
             )
 
-            time.sleep(0.7)  # flood-safe
+            time.sleep(0.8)  # flood-safe
 
         cleanup_user(user_id)
 
@@ -136,4 +134,4 @@ def register_process(bot):
                 f"{make_bar(total, total)}\n"
                 f"{total} / {total} (100%)"
             )
-                )
+        )
