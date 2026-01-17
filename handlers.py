@@ -1,18 +1,3 @@
-import re
-import time
-from pyrogram import Client, filters
-from mongo import (
-    reset_user, create_user, add_file, get_user, get_files,
-    set_thumbnail, get_thumbnail, delete_thumbnail,
-    set_awaiting_thumb, is_awaiting_thumb
-)
-
-# ---------- HELPERS ----------
-def extract_episode(name):
-    m = re.search(r"[Ee](\d+)", name)
-    return int(m.group(1)) if m else 0
-
-
 def register_handlers(app: Client):
 
     # ---------- START ----------
@@ -48,7 +33,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.command("rename"))
     async def rename(_, msg):
         try:
-            _, base, ep = msg.text.split(" ", 2)
+            _, name, ep = msg.text.split(" ", 2)
             s = int(re.search(r"S(\d+)", ep).group(1))
             e = int(re.search(r"E(\d+)", ep).group(1))
         except:
@@ -57,75 +42,23 @@ def register_handlers(app: Client):
         from mongo import users
         users.update_one(
             {"user_id": msg.from_user.id},
-            {"$set": {"rename": {"base": base, "season": s, "episode": e}}}
+            {"$set": {"rename": {"base": name, "season": s, "episode": e}}}
         )
         await msg.reply("✏️ Rename saved")
 
-    # ---------- THUMBNAIL ----------
-    @app.on_message(filters.command("setthumb"))
-    async def setthumb(_, msg):
-        set_awaiting_thumb(msg.from_user.id, True)
-        await msg.reply("🖼 Send thumbnail image now")
-
-    @app.on_message(filters.photo | filters.document)
-    async def save_thumb(_, msg):
-        if not is_awaiting_thumb(msg.from_user.id):
-            return
-
-        if msg.photo:
-            file_id = msg.photo.file_id
-        elif msg.document and msg.document.mime_type.startswith("image/"):
-            file_id = msg.document.file_id
-        else:
-            return await msg.reply("❌ Send a valid image")
-
-        set_thumbnail(msg.from_user.id, file_id)
-        set_awaiting_thumb(msg.from_user.id, False)
-        await msg.reply("✅ Thumbnail saved")
-
-    @app.on_message(filters.command("viewthumb"))
-    async def viewthumb(_, msg):
-        thumb = get_thumbnail(msg.from_user.id)
-        if not thumb:
-            return await msg.reply("❌ No thumbnail set")
-        await app.send_photo(msg.chat.id, thumb, caption="🖼 Current thumbnail")
-
-    @app.on_message(filters.command("deletethumb"))
-    async def deletethumb(_, msg):
-        delete_thumbnail(msg.from_user.id)
-        await msg.reply("🗑 Thumbnail removed")
-
-    # ---------- PROCESS (SAFE) ----------
+    # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
-async def process(_, msg):
-    user = get_user(msg.from_user.id)
-    if not user or not user["files"]:
-        return await msg.reply("❌ No files")
+    async def process(_, msg):
+        user = get_user(msg.from_user.id)
+        if not user or not user["files"]:
+            return await msg.reply("❌ No files")
 
-    rename = user["rename"]
-    thumb = get_thumbnail(msg.from_user.id)
+        rename = user["rename"]
+        status = await msg.reply("🚀 Starting...")
 
-    # Sort files safely (mixed order supported)
-    files = sorted(
-        user["files"],
-        key=lambda f: extract_episode(f["file_name"])
-    )
+        for i, f in enumerate(user["files"]):
+            name = f"{rename['base']} S{rename['season']}E{rename['episode']+i:02d}.mkv"
+            path = await app.download_media(f["file_id"])
+            await app.send_document(msg.chat.id, document=path, file_name=name)
 
-    status = await msg.reply("🚀 Processing started...")
-
-    for i, f in enumerate(files):
-        ep_no = rename["episode"] + i
-        name = f"{rename['base']} S{rename['season']}E{ep_no:02d}.mkv"
-
-        # ⬇ DOWNLOAD (NO CUSTOM PROGRESS)
-        path = await app.download_media(f["file_id"])
-
-        # ⬆ UPLOAD (TELEGRAM NATIVE PROGRESS)
-        await app.send_document(
-            chat_id=msg.chat.id,
-            document=path,
-            file_name=name,
-            thumb=thumb
-        )
-
-    await status.edit_text("✅ Completed")
+        await status.edit_text("✅ Completed")
