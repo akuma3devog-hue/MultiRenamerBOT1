@@ -18,20 +18,29 @@ def create_user(user_id):
             "rename": None,
             "thumbnail": None,
             "awaiting_thumbnail": False,
+            "stats": {
+                "total_files": 0,
+                "total_size": 0
+            },
             "created_at": datetime.utcnow()
         }},
         upsert=True
     )
 
 def add_file(user_id, file):
-    users.update_one({"user_id": user_id}, {"$push": {"files": file}})
+    users.update_one(
+        {"user_id": user_id},
+        {
+            "$push": {"files": file},
+            "$inc": {
+                "stats.total_files": 1,
+                "stats.total_size": file.get("size", 0)
+            }
+        }
+    )
 
 def get_user(user_id):
     return users.find_one({"user_id": user_id})
-
-def get_files(user_id):
-    user = get_user(user_id)
-    return user["files"] if user else []
 
 # ---------- THUMBNAIL ----------
 def set_thumbnail(user_id, file_id):
@@ -44,7 +53,7 @@ def get_thumbnail(user_id):
 def delete_thumbnail(user_id):
     users.update_one({"user_id": user_id}, {"$set": {"thumbnail": None}})
 
-def set_awaiting_thumb(user_id, state: bool):
+def set_awaiting_thumb(user_id, state):
     users.update_one({"user_id": user_id}, {"$set": {"awaiting_thumbnail": state}})
 
 def is_awaiting_thumb(user_id):
