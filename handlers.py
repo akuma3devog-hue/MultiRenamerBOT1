@@ -6,10 +6,39 @@ from mongo import (
     set_thumbnail, get_thumbnail, delete_thumbnail,
     set_awaiting_thumb, is_awaiting_thumb
 )
-from progress import progress_bar
+
+# ---------------- PROGRESS BAR ----------------
+async def progress_bar(current, total, status_msg, start_time, label):
+    percent = int(current * 100 / total)
+    filled = int(percent / 5)
+    bar = "█" * filled + "░" * (20 - filled)
+
+    elapsed = time.time() - start_time
+    speed = current / elapsed if elapsed > 0 else 0
+    eta = int((total - current) / speed) if speed > 0 else 0
+
+    text = (
+        f"🚀 {label}...\n"
+        f"{bar}\n"
+        f"{percent}%\n"
+        f"ETA: {eta}s"
+    )
+
+    try:
+        await status_msg.edit_text(text)
+    except:
+        pass
+
+
+# ---------------- HELPERS ----------------
+def extract_episode(name):
+    m = re.search(r"[Ee](\d+)", name)
+    return int(m.group(1)) if m else 0
+
 
 def register_handlers(app: Client):
 
+    # ---------- START ----------
     @app.on_message(filters.command("start"))
     async def start(_, msg):
         reset_user(msg.from_user.id)
@@ -30,6 +59,7 @@ def register_handlers(app: Client):
             return
 
         media = msg.document or msg.video
+
         add_file(msg.from_user.id, {
             "file_id": media.file_id,
             "file_name": media.file_name or "video.mkv",
@@ -99,11 +129,18 @@ def register_handlers(app: Client):
         rename = user["rename"]
         thumb = get_thumbnail(msg.from_user.id)
 
-        status = await msg.reply("🚀 Starting...")
+        # 🔥 SORT FILES BY EPISODE NUMBER
+        files = sorted(
+            user["files"],
+            key=lambda f: extract_episode(f["file_name"])
+        )
+
+        status = await msg.reply("🚀 Preparing...")
         start_time = time.time()
 
-        for i, f in enumerate(user["files"]):
-            name = f"{rename['base']} S{rename['season']}E{rename['episode']+i:02d}.mkv"
+        for i, f in enumerate(files):
+            ep_no = rename["episode"] + i
+            name = f"{rename['base']} S{rename['season']}E{ep_no:02d}.mkv"
 
             path = await app.download_media(
                 f["file_id"],
@@ -120,4 +157,4 @@ def register_handlers(app: Client):
                 progress_args=(status, time.time(), "Uploading")
             )
 
-        await status.edit("✅ Completed")
+        await status.edit_text("✅ Completed")
