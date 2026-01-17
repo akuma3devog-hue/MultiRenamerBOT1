@@ -7,23 +7,34 @@ db = client["multi_renamer"]
 users = db["users"]
 
 def reset_user(user_id):
-    users.delete_one({"user_id": user_id})
-
-def create_user(user_id):
     users.update_one(
         {"user_id": user_id},
         {"$set": {
-            "user_id": user_id,
             "files": [],
             "rename": None,
-            "thumbnail": None,
-            "awaiting_thumbnail": False,
-            "stats": {
-                "total_files": 0,
-                "total_size": 0
-            },
-            "created_at": datetime.utcnow()
+            "awaiting_thumbnail": False
         }},
+        upsert=True
+    )
+def create_user(user_id):
+    users.update_one(
+        {"user_id": user_id},
+        {
+            "$setOnInsert": {
+                "user_id": user_id,
+                "thumbnail": None,
+                "created_at": datetime.utcnow()
+            },
+            "$set": {
+                "files": [],
+                "rename": None,
+                "awaiting_thumbnail": False,
+                "stats": {
+                    "total_files": 0,
+                    "total_size": 0
+                }
+            }
+        },
         upsert=True
     )
 
