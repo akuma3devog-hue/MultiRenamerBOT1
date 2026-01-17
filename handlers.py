@@ -7,42 +7,7 @@ from mongo import (
     set_awaiting_thumb, is_awaiting_thumb
 )
 
-# ---------------- PROGRESS BAR (THROTTLED) ----------------
-async def progress_bar(current, total, status_msg, start_time, label):
-    now = time.time()
-
-    # throttle edits (very important)
-    if hasattr(status_msg, "_last_edit"):
-        if now - status_msg._last_edit < 1.2:
-            return
-
-    status_msg._last_edit = now
-
-    if total == 0:
-        return
-
-    percent = int(current * 100 / total)
-    filled = percent // 5
-    bar = "█" * filled + "░" * (20 - filled)
-
-    elapsed = now - start_time
-    speed = current / elapsed if elapsed > 0 else 0
-    eta = int((total - current) / speed) if speed > 0 else 0
-
-    text = (
-        f"🚀 {label}\n\n"
-        f"{bar}\n"
-        f"{percent}%\n"
-        f"⏳ ETA: {eta}s"
-    )
-
-    try:
-        await status_msg.edit_text(text)
-    except:
-        pass
-
-
-# ---------------- HELPERS ----------------
+# ---------- HELPERS ----------
 def extract_episode(name):
     m = re.search(r"[Ee](\d+)", name)
     return int(m.group(1)) if m else 0
@@ -83,7 +48,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.command("rename"))
     async def rename(_, msg):
         try:
-            _, name, ep = msg.text.split(" ", 2)
+            _, base, ep = msg.text.split(" ", 2)
             s = int(re.search(r"S(\d+)", ep).group(1))
             e = int(re.search(r"E(\d+)", ep).group(1))
         except:
@@ -92,11 +57,11 @@ def register_handlers(app: Client):
         from mongo import users
         users.update_one(
             {"user_id": msg.from_user.id},
-            {"$set": {"rename": {"base": name, "season": s, "episode": e}}}
+            {"$set": {"rename": {"base": base, "season": s, "episode": e}}}
         )
         await msg.reply("✏️ Rename saved")
 
-    # ---------- THUMB ----------
+    # ---------- THUMBNAIL ----------
     @app.on_message(filters.command("setthumb"))
     async def setthumb(_, msg):
         set_awaiting_thumb(msg.from_user.id, True)
@@ -130,45 +95,37 @@ def register_handlers(app: Client):
         delete_thumbnail(msg.from_user.id)
         await msg.reply("🗑 Thumbnail removed")
 
-    # ---------- PROCESS ----------
+    # ---------- PROCESS (SAFE) ----------
     @app.on_message(filters.command("process"))
-    async def process(_, msg):
-        user = get_user(msg.from_user.id)
-        if not user or not user["files"]:
-            return await msg.reply("❌ No files")
+async def process(_, msg):
+    user = get_user(msg.from_user.id)
+    if not user or not user["files"]:
+        return await msg.reply("❌ No files")
 
-        rename = user["rename"]
-        thumb = get_thumbnail(msg.from_user.id)
+    rename = user["rename"]
+    thumb = get_thumbnail(msg.from_user.id)
 
-        files = sorted(
-            user["files"],
-            key=lambda f: extract_episode(f["file_name"])
+    # Sort files safely (mixed order supported)
+    files = sorted(
+        user["files"],
+        key=lambda f: extract_episode(f["file_name"])
+    )
+
+    status = await msg.reply("🚀 Processing started...")
+
+    for i, f in enumerate(files):
+        ep_no = rename["episode"] + i
+        name = f"{rename['base']} S{rename['season']}E{ep_no:02d}.mkv"
+
+        # ⬇ DOWNLOAD (NO CUSTOM PROGRESS)
+        path = await app.download_media(f["file_id"])
+
+        # ⬆ UPLOAD (TELEGRAM NATIVE PROGRESS)
+        await app.send_document(
+            chat_id=msg.chat.id,
+            document=path,
+            file_name=name,
+            thumb=thumb
         )
 
-        status = await msg.reply("📥 Starting download…")
-
-        for i, f in enumerate(files):
-            ep_no = rename["episode"] + i
-            name = f"{rename['base']} S{rename['season']}E{ep_no:02d}.mkv"
-
-            # show immediate activity (prevents “stuck” feeling)
-            await status.edit_text(f"📥 Downloading:\n{f['file_name']}")
-
-            path = await app.download_media(
-                f["file_id"],
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Downloading")
-            )
-
-            await status.edit_text(f"📤 Uploading:\n{name}")
-
-            await app.send_document(
-                msg.chat.id,
-                document=path,
-                thumb=thumb,
-                file_name=name,
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Uploading")
-            )
-
-        await status.edit_text("✅ Completed")
+    await status.edit_text("✅ Completed")
