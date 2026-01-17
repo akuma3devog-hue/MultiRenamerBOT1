@@ -1,64 +1,65 @@
-import re
-import time
-import asyncio
-from pyrogram import Client, filters
-from mongo import reset_user, create_user, add_file, get_user, get_files
+from pymongo import MongoClient
+from datetime import datetime
+import os
 
-def register_handlers(app: Client):
+client = MongoClient(os.getenv("MONGO_URI"))
+db = client["multi_renamer"]
+users = db["users"]
 
-    @app.on_message(filters.command("start"))
-    async def start(_, msg):
-        reset_user(msg.from_user.id)
-        create_user(msg.from_user.id)
-        await msg.reply(
-            "✅ Batch started\n\n"
-            "📂 Send files\n"
-            "Then /rename and /process"
-        )
+# -----------------------------
+# USER / BATCH
+# -----------------------------
 
-    @app.on_message(filters.document | filters.video)
-    async def upload(_, msg):
-        user = get_user(msg.from_user.id)
-        if not user:
-            return
+def reset_user(user_id):
+    users.delete_one({"user_id": user_id})
 
-        media = msg.document or msg.video
-        add_file(msg.from_user.id, {
-            "file_id": media.file_id,
-            "file_name": media.file_name or "video.mp4",
-            "type": "document" if msg.document else "video"
-        })
+def create_user(user_id):
+    users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "user_id": user_id,
+            "files": [],
+            "rename": None,
+            "thumbnail": None,          # ✅ ADD: per-user thumbnail
+            "processing": False,
+            "created_at": datetime.utcnow()
+        }},
+        upsert=True
+    )
 
-        await msg.reply(f"📂 Added: {media.file_name}")
+def get_user(user_id):
+    return users.find_one({"user_id": user_id})
 
-    @app.on_message(filters.command("rename"))
-    async def rename(_, msg):
-        try:
-            _, base, ep = msg.text.split(" ", 2)
-            s = int(re.search(r"S(\d+)", ep).group(1))
-            e = int(re.search(r"E(\d+)", ep).group(1))
-        except:
-            return await msg.reply("❌ Usage: /rename Name S1E1")
+def get_files(user_id):
+    user = get_user(user_id)
+    return user["files"] if user else []
 
-        from mongo import users
-        users.update_one(
-            {"user_id": msg.from_user.id},
-            {"$set": {"rename": {"base": base, "season": s, "episode": e}}}
-        )
-        await msg.reply("✏️ Rename saved")
+# -----------------------------
+# FILES
+# -----------------------------
 
-    @app.on_message(filters.command("process"))
-    async def process(_, msg):
-        user = get_user(msg.from_user.id)
-        if not user or not user["files"]:
-            return await msg.reply("❌ No files")
+def add_file(user_id, file):
+    users.update_one(
+        {"user_id": user_id},
+        {"$push": {"files": file}}
+    )
 
-        rename = user["rename"]
-        progress_msg = await msg.reply("🚀 Starting...")
+# -----------------------------
+# THUMBNAIL (NEW)
+# -----------------------------
 
-        for i, f in enumerate(user["files"]):
-            name = f"{rename['base']} S{rename['season']}E{rename['episode']+i:02d}.mkv"
-            path = await app.download_media(f["file_id"])
-            await app.send_document(msg.chat.id, document=path, file_name=name)
+def set_thumbnail(user_id, file_id):
+    users.update_one(
+        {"user_id": user_id},
+        {"$set": {"thumbnail": file_id}}
+    )
 
-        await progress_msg.edit_text("✅ Completed")
+def get_thumbnail(user_id):
+    user = get_user(user_id)
+    return user.get("thumbnail") if user else None
+
+def delete_thumbnail(user_id):
+    users.update_one(
+        {"user_id": user_id},
+        {"$set": {"thumbnail": None}}
+    )
