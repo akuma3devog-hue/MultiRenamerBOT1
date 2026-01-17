@@ -1,5 +1,6 @@
 import re
 import time
+import asyncio
 from pyrogram import Client, filters
 from mongo import (
     reset_user, create_user, add_file, get_user,
@@ -14,8 +15,8 @@ async def progress_bar(current, total, message, start, label):
 
     percent = int(current * 100 / total)
 
-    # prevent edit flood
-    if percent % 5 != 0 and percent != 100:
+    # 🔒 STRONG FLOOD CONTROL
+    if percent % 10 != 0 and percent != 100:
         return
 
     blocks = int(percent / 5)
@@ -25,16 +26,17 @@ async def progress_bar(current, total, message, start, label):
     speed = current / elapsed if elapsed > 0 else 0
     eta = int((total - current) / speed) if speed > 0 else 0
 
-    text = (
-        f"🚀 {label}\n"
-        f"{bar}\n"
-        f"{percent}% | ETA: {eta}s"
-    )
-
     try:
-        await message.edit_text(text)
+        await message.edit_text(
+            f"🚀 {label}\n"
+            f"{bar}\n"
+            f"{percent}% | ETA: {eta}s"
+        )
     except:
         pass
+
+    # 🔑 yield control to event loop
+    await asyncio.sleep(0)
 
 
 # ---------------- HELPERS ----------------
@@ -134,6 +136,9 @@ def register_handlers(app: Client):
         if not user or not user.get("files"):
             return await msg.reply("❌ No files")
 
+        if not user.get("rename"):
+            return await msg.reply("❌ Use /rename first")
+
         rename = user["rename"]
         thumb = get_thumbnail(msg.from_user.id)
 
@@ -157,14 +162,12 @@ def register_handlers(app: Client):
                 message_ids=f["message_id"]
             )
 
-            # DOWNLOAD WITH PROGRESS
             path = await app.download_media(
                 original_msg,
                 progress=progress_bar,
                 progress_args=(status, start, "Downloading")
             )
 
-            # UPLOAD WITH PROGRESS
             await app.send_document(
                 msg.chat.id,
                 document=path,
@@ -182,4 +185,4 @@ def register_handlers(app: Client):
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-            )
+        )
