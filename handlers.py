@@ -9,7 +9,15 @@ from mongo import (
 
 # ---------------- PROGRESS BAR ----------------
 async def progress_bar(current, total, message, start, label):
+    if total == 0:
+        return
+
     percent = int(current * 100 / total)
+
+    # prevent edit flood
+    if percent % 5 != 0 and percent != 100:
+        return
+
     blocks = int(percent / 5)
     bar = "█" * blocks + "░" * (20 - blocks)
 
@@ -35,7 +43,7 @@ def extract_episode(name):
     return int(m.group(1)) if m else 0
 
 
-def register_handlers(app):
+def register_handlers(app: Client):
 
     # ---------- START ----------
     @app.on_message(filters.command("start"))
@@ -58,12 +66,12 @@ def register_handlers(app):
             return
 
         media = msg.document or msg.video
-        size = media.file_size or 0
 
         add_file(msg.from_user.id, {
-            "file_id": media.file_id,
+            "chat_id": msg.chat.id,
+            "message_id": msg.id,
             "file_name": media.file_name or "video.mkv",
-            "size": size
+            "size": media.file_size or 0
         })
 
         await msg.reply(f"📂 Added: {media.file_name}")
@@ -123,12 +131,19 @@ def register_handlers(app):
     @app.on_message(filters.command("process"))
     async def process(_, msg):
         user = get_user(msg.from_user.id)
-        if not user or not user["files"]:
+        if not user or not user.get("files"):
             return await msg.reply("❌ No files")
 
         rename = user["rename"]
         thumb = get_thumbnail(msg.from_user.id)
-        files = sorted(user["files"], key=lambda f: extract_episode(f["file_name"]))
+
+        files = sorted(
+            user["files"],
+            key=lambda f: extract_episode(f["file_name"])
+        )
+
+        total_files = len(files)
+        total_size = sum(f.get("size", 0) for f in files)
 
         status = await msg.reply("🚀 Preparing...")
         start = time.time()
@@ -137,12 +152,19 @@ def register_handlers(app):
             ep = rename["episode"] + i
             filename = f"{rename['base']} S{rename['season']}E{ep:02d}.mkv"
 
+            original_msg = await app.get_messages(
+                chat_id=f["chat_id"],
+                message_ids=f["message_id"]
+            )
+
+            # DOWNLOAD WITH PROGRESS
             path = await app.download_media(
-                f["file_id"],
+                original_msg,
                 progress=progress_bar,
                 progress_args=(status, start, "Downloading")
             )
 
+            # UPLOAD WITH PROGRESS
             await app.send_document(
                 msg.chat.id,
                 document=path,
@@ -152,13 +174,12 @@ def register_handlers(app):
                 progress_args=(status, time.time(), "Uploading")
             )
 
-        total_mb = round(user["stats"]["total_size"] / (1024 * 1024), 2)
-        total_files = user["stats"]["total_files"]
         elapsed = int(time.time() - start)
+        total_mb = round(total_size / (1024 * 1024), 2)
 
         await status.edit_text(
             f"✅ Completed\n\n"
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-    )
+            )
