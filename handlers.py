@@ -1,51 +1,15 @@
 import re
 import time
-import asyncio
 from pyrogram import Client, filters
 from mongo import (
-    reset_user,
-    create_user,
-    add_file,
-    get_user,
-    get_files,
-    set_thumbnail,
-    get_thumbnail,
-    delete_thumbnail
+    reset_user, create_user, add_file, get_user, get_files,
+    set_thumbnail, get_thumbnail, delete_thumbnail,
+    set_awaiting_thumb, is_awaiting_thumb
 )
-
-# -----------------------------
-# PROGRESS CALLBACK
-# -----------------------------
-
-async def upload_progress(current, total, message, start_time, action):
-    if total == 0:
-        return
-
-    percent = current * 100 / total
-    elapsed = time.time() - start_time
-
-    speed = current / elapsed if elapsed > 0 else 0
-    eta = (total - current) / speed if speed > 0 else 0
-
-    bar_len = 20
-    filled = int(bar_len * percent / 100)
-    bar = "█" * filled + "░" * (bar_len - filled)
-
-    try:
-        await message.edit_text(
-            f"{action}\n"
-            f"{bar}\n"
-            f"{percent:.1f}% | ETA: {int(eta)}s"
-        )
-    except:
-        pass
-
+from progress import progress_bar
 
 def register_handlers(app: Client):
 
-    # -----------------------------
-    # START
-    # -----------------------------
     @app.on_message(filters.command("start"))
     async def start(_, msg):
         reset_user(msg.from_user.id)
@@ -53,14 +17,12 @@ def register_handlers(app: Client):
         await msg.reply(
             "✅ Batch started\n\n"
             "📂 Send files\n"
-            "✏️ /rename Name S1E1\n"
-            "🖼 /setthumb (optional)\n"
-            "🚀 /process"
+            "/rename Name S1E1\n"
+            "/process\n\n"
+            "/setthumb • /viewthumb • /deletethumb"
         )
 
-    # -----------------------------
-    # UPLOAD FILES
-    # -----------------------------
+    # ---------- FILE UPLOAD ----------
     @app.on_message(filters.document | filters.video)
     async def upload(_, msg):
         user = get_user(msg.from_user.id)
@@ -70,19 +32,17 @@ def register_handlers(app: Client):
         media = msg.document or msg.video
         add_file(msg.from_user.id, {
             "file_id": media.file_id,
-            "file_name": media.file_name or "video.mp4",
+            "file_name": media.file_name or "video.mkv",
             "type": "document" if msg.document else "video"
         })
 
         await msg.reply(f"📂 Added: {media.file_name}")
 
-    # -----------------------------
-    # RENAME
-    # -----------------------------
+    # ---------- RENAME ----------
     @app.on_message(filters.command("rename"))
     async def rename(_, msg):
         try:
-            _, base, ep = msg.text.split(" ", 2)
+            _, name, ep = msg.text.split(" ", 2)
             s = int(re.search(r"S(\d+)", ep).group(1))
             e = int(re.search(r"E(\d+)", ep).group(1))
         except:
@@ -91,22 +51,19 @@ def register_handlers(app: Client):
         from mongo import users
         users.update_one(
             {"user_id": msg.from_user.id},
-            {"$set": {"rename": {"base": base, "season": s, "episode": e}}}
+            {"$set": {"rename": {"base": name, "season": s, "episode": e}}}
         )
         await msg.reply("✏️ Rename saved")
 
-    # -----------------------------
-    # SET THUMBNAIL
-    # -----------------------------
+    # ---------- THUMB ----------
     @app.on_message(filters.command("setthumb"))
     async def setthumb(_, msg):
-        await msg.reply("🖼 Send the thumbnail image now.")
+        set_awaiting_thumb(msg.from_user.id, True)
+        await msg.reply("🖼 Send thumbnail image now")
 
     @app.on_message(filters.photo | filters.document)
     async def save_thumb(_, msg):
-        if not msg.reply_to_message:
-            return
-        if "thumbnail" not in msg.reply_to_message.text.lower():
+        if not is_awaiting_thumb(msg.from_user.id):
             return
 
         if msg.photo:
@@ -114,54 +71,53 @@ def register_handlers(app: Client):
         elif msg.document and msg.document.mime_type.startswith("image/"):
             file_id = msg.document.file_id
         else:
-            return await msg.reply("❌ Send a valid image.")
+            return await msg.reply("❌ Send a valid image")
 
         set_thumbnail(msg.from_user.id, file_id)
+        set_awaiting_thumb(msg.from_user.id, False)
         await msg.reply("✅ Thumbnail saved")
 
-    # -----------------------------
-    # DELETE THUMBNAIL
-    # -----------------------------
+    @app.on_message(filters.command("viewthumb"))
+    async def viewthumb(_, msg):
+        thumb = get_thumbnail(msg.from_user.id)
+        if not thumb:
+            return await msg.reply("❌ No thumbnail set")
+        await app.send_photo(msg.chat.id, thumb, caption="🖼 Current thumbnail")
+
     @app.on_message(filters.command("deletethumb"))
     async def deletethumb(_, msg):
         delete_thumbnail(msg.from_user.id)
         await msg.reply("🗑 Thumbnail removed")
 
-    # -----------------------------
-    # PROCESS FILES
-    # -----------------------------
+    # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
     async def process(_, msg):
         user = get_user(msg.from_user.id)
         if not user or not user["files"]:
             return await msg.reply("❌ No files")
 
-        if not user.get("rename"):
-            return await msg.reply("❌ Use /rename first")
-
         rename = user["rename"]
-        thumb_id = get_thumbnail(msg.from_user.id)
+        thumb = get_thumbnail(msg.from_user.id)
 
-        for i, f in enumerate(user["files"], start=1):
-            new_name = (
-                f"{rename['base']} "
-                f"S{rename['season']}E{rename['episode'] + i - 1:02d}.mkv"
+        status = await msg.reply("🚀 Starting...")
+        start_time = time.time()
+
+        for i, f in enumerate(user["files"]):
+            name = f"{rename['base']} S{rename['season']}E{rename['episode']+i:02d}.mkv"
+
+            path = await app.download_media(
+                f["file_id"],
+                progress=progress_bar,
+                progress_args=(status, start_time, "Downloading")
             )
 
-            progress_msg = await msg.reply(f"📤 Uploading {new_name}...")
-            start_time = time.time()
-
-            # Download
-            path = await app.download_media(f["file_id"])
-
-            # Upload with thumbnail + progress
             await app.send_document(
-                chat_id=msg.chat.id,
+                msg.chat.id,
                 document=path,
-                file_name=new_name,
-                thumb=thumb_id,
-                progress=upload_progress,
-                progress_args=(progress_msg, start_time, "📤 Uploading")
+                thumb=thumb,
+                file_name=name,
+                progress=progress_bar,
+                progress_args=(status, time.time(), "Uploading")
             )
 
-        await msg.reply("✅ Batch completed")
+        await status.edit("✅ Completed")
