@@ -7,21 +7,33 @@ from mongo import (
     set_awaiting_thumb, is_awaiting_thumb
 )
 
-# ---------------- PROGRESS BAR ----------------
+# ---------------- PROGRESS BAR (THROTTLED) ----------------
 async def progress_bar(current, total, status_msg, start_time, label):
+    now = time.time()
+
+    # throttle edits (very important)
+    if hasattr(status_msg, "_last_edit"):
+        if now - status_msg._last_edit < 1.2:
+            return
+
+    status_msg._last_edit = now
+
+    if total == 0:
+        return
+
     percent = int(current * 100 / total)
-    filled = int(percent / 5)
+    filled = percent // 5
     bar = "█" * filled + "░" * (20 - filled)
 
-    elapsed = time.time() - start_time
+    elapsed = now - start_time
     speed = current / elapsed if elapsed > 0 else 0
     eta = int((total - current) / speed) if speed > 0 else 0
 
     text = (
-        f"🚀 {label}...\n"
+        f"🚀 {label}\n\n"
         f"{bar}\n"
         f"{percent}%\n"
-        f"ETA: {eta}s"
+        f"⏳ ETA: {eta}s"
     )
 
     try:
@@ -59,7 +71,6 @@ def register_handlers(app: Client):
             return
 
         media = msg.document or msg.video
-
         add_file(msg.from_user.id, {
             "file_id": media.file_id,
             "file_name": media.file_name or "video.mkv",
@@ -129,24 +140,27 @@ def register_handlers(app: Client):
         rename = user["rename"]
         thumb = get_thumbnail(msg.from_user.id)
 
-        # 🔥 SORT FILES BY EPISODE NUMBER
         files = sorted(
             user["files"],
             key=lambda f: extract_episode(f["file_name"])
         )
 
-        status = await msg.reply("🚀 Preparing...")
-        start_time = time.time()
+        status = await msg.reply("📥 Starting download…")
 
         for i, f in enumerate(files):
             ep_no = rename["episode"] + i
             name = f"{rename['base']} S{rename['season']}E{ep_no:02d}.mkv"
 
+            # show immediate activity (prevents “stuck” feeling)
+            await status.edit_text(f"📥 Downloading:\n{f['file_name']}")
+
             path = await app.download_media(
                 f["file_id"],
                 progress=progress_bar,
-                progress_args=(status, start_time, "Downloading")
+                progress_args=(status, time.time(), "Downloading")
             )
+
+            await status.edit_text(f"📤 Uploading:\n{name}")
 
             await app.send_document(
                 msg.chat.id,
