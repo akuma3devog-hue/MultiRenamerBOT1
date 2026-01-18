@@ -138,125 +138,138 @@ def register_handlers(app: Client):
         await msg.reply("🗑 Thumbnail removed")
 
     # ---------- PROCESS ----------
-@app.on_message(filters.command("process"))
-async def process(_, msg):
-    user = get_user(msg.from_user.id)
-    if not user or not user.get("files"):
-        return await msg.reply("❌ No files")
+    @app.on_message(filters.command("process"))
+    async def process(_, msg):
+        user = get_user(msg.from_user.id)
+        if not user or not user.get("files"):
+            return await msg.reply("❌ No files")
 
-    if not user.get("rename"):
-        return await msg.reply("❌ Use /rename first")
+        if not user.get("rename"):
+            return await msg.reply("❌ Use /rename first")
 
-    rename = user["rename"]
-    thumb = get_thumbnail(msg.from_user.id)
+        rename = user["rename"]
+        thumb = get_thumbnail(msg.from_user.id)   # file_id or None
 
-    files = sorted(
-        user["files"],
-        key=lambda f: extract_episode(f["file_name"])
-    )
-
-    total_files = len(files)
-    total_size = sum(f.get("size", 0) for f in files)
-
-    batch_start = time.time()
-    status = await msg.reply("🚀 Starting process...")
-
-    download_dir = "downloads"
-    os.makedirs(download_dir, exist_ok=True)
-
-    server_copy_count = 0
-    fallback_count = 0
-
-    for i, f in enumerate(files, start=1):
-        filename = (
-            f"{rename['base']} "
-            f"S{rename['season']}E{rename['episode'] + i - 1:02d}.mkv"
+        files = sorted(
+            user["files"],
+            key=lambda f: extract_episode(f["file_name"])
         )
 
-        original_msg = await app.get_messages(
-            f["chat_id"],
-            f["message_id"]
-        )
+        total_files = len(files)
+        total_size = sum(f.get("size", 0) for f in files)
 
-        # ---------- TRY SERVER COPY ----------
-        try:
+        batch_start = time.time()
+        status = await msg.reply("🚀 Starting process...")
+
+        download_dir = "downloads"
+        os.makedirs(download_dir, exist_ok=True)
+
+        server_copy_count = 0
+        fallback_count = 0
+
+        for i, f in enumerate(files, start=1):
+            filename = (
+                f"{rename['base']} "
+                f"S{rename['season']}E{rename['episode'] + i - 1:02d}.mkv"
+            )
+
+            original_msg = await app.get_messages(
+                f["chat_id"],
+                f["message_id"]
+            )
+
+            # ================= SERVER COPY =================
+            try:
+                await status.edit_text(
+                    f"🚀 Processing {i}/{total_files}\n"
+                    f"⚡ Server copy\n"
+                    f"📄 {filename}"
+                )
+
+                # try WITH thumbnail
+                await app.send_document(
+                    chat_id=msg.chat.id,
+                    document=original_msg.document.file_id,
+                    file_name=filename,
+                    thumb=thumb
+                )
+
+                server_copy_count += 1
+                continue
+
+            except Exception:
+                # retry WITHOUT thumbnail (very important)
+                try:
+                    await app.send_document(
+                        chat_id=msg.chat.id,
+                        document=original_msg.document.file_id,
+                        file_name=filename
+                    )
+
+                    server_copy_count += 1
+                    continue
+
+                except Exception:
+                    pass   # real fallback below
+
+            # ================= FALLBACK =================
+            fallback_count += 1
+            file_path = os.path.join(download_dir, filename)
+
             await status.edit_text(
                 f"🚀 Processing {i}/{total_files}\n"
-                f"⚡ Server copy\n"
+                f"⬇️ Downloading (fallback)\n"
+                f"📄 {filename}"
+            )
+
+            path = await app.download_media(
+                original_msg,
+                file_name=file_path,
+                progress=progress_bar,
+                progress_args=(status, time.time(), "Downloading")
+            )
+
+            if not path or not os.path.exists(path):
+                continue
+
+            await status.edit_text(
+                f"🚀 Processing {i}/{total_files}\n"
+                f"⬆️ Uploading (fallback)\n"
                 f"📄 {filename}"
             )
 
             await app.send_document(
-                chat_id=msg.chat.id,
-                document=original_msg.document.file_id,
+                msg.chat.id,
+                document=path,
                 file_name=filename,
-                thumb=thumb
+                progress=progress_bar,
+                progress_args=(status, time.time(), "Uploading")
             )
 
-            server_copy_count += 1
-            continue
-
-        except Exception:
-            pass  # fallback below
-
-        # ---------- FALLBACK ----------
-        fallback_count += 1
-        file_path = os.path.join(download_dir, filename)
-
-        await status.edit_text(
-            f"🚀 Processing {i}/{total_files}\n"
-            f"⬇️ Downloading (fallback)\n"
-            f"📄 {filename}"
-        )
-
-        path = await app.download_media(
-            original_msg,
-            file_name=file_path,
-            progress=progress_bar,
-            progress_args=(status, time.time(), "Downloading")
-        )
-
-        if not path or not os.path.exists(path):
-            continue
-
-        await status.edit_text(
-            f"🚀 Processing {i}/{total_files}\n"
-            f"⬆️ Uploading (fallback)\n"
-            f"📄 {filename}"
-        )
-
-        await app.send_document(
-            msg.chat.id,
-            document=path,
-            file_name=filename,
-            progress=progress_bar,
-            progress_args=(status, time.time(), "Uploading")
-        )
-
-        try:
-            os.remove(path)
-        except:
-            pass
-
-    # ---------- FINAL CLEANUP ----------
-    if os.path.exists(download_dir):
-        for f in os.listdir(download_dir):
             try:
-                os.remove(os.path.join(download_dir, f))
+                os.remove(path)
             except:
                 pass
 
-    elapsed = int(time.time() - batch_start)
-    total_mb = round(total_size / (1024 * 1024), 2)
+        # ================= FINAL CLEANUP =================
+        if os.path.exists(download_dir):
+            for f in os.listdir(download_dir):
+                try:
+                    os.remove(os.path.join(download_dir, f))
+                except:
+                    pass
 
-    reset_user(msg.from_user.id)
-    create_user(msg.from_user.id)
+        elapsed = int(time.time() - batch_start)
+        total_mb = round(total_size / (1024 * 1024), 2)
 
-    await status.edit_text(
-        f"✅ Completed\n\n"
-        f"📦 Files: {total_files}\n"
-        f"⚡ Server copy: {server_copy_count}\n"
-        f"🐢 Fallback: {fallback_count}\n"
-        f"💾 Size: {total_mb} MB\n"
-        f"⏱ Time: {elapsed}s"
-            )
+        reset_user(msg.from_user.id)
+        create_user(msg.from_user.id)
+
+        await status.edit_text(
+            f"✅ Completed\n\n"
+            f"📦 Files: {total_files}\n"
+            f"⚡ Server copy: {server_copy_count}\n"
+            f"🐢 Fallback: {fallback_count}\n"
+            f"💾 Size: {total_mb} MB\n"
+            f"⏱ Time: {elapsed}s"
+        )
