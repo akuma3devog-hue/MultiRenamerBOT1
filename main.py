@@ -5,36 +5,27 @@ from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, PORT
 from handlers import register_handlers
 
-# --------------------
-# Flask app (for Render + UptimeRobot)
-# --------------------
 web = Flask(__name__)
 
 @web.route("/", methods=["GET", "HEAD"])
 def health():
     return "OK", 200
 
-
 def run_web():
     web.run(host="0.0.0.0", port=PORT)
 
-
-# --------------------
-# Pyrogram Bot
-# --------------------
 app = Client(
     "renamer_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    workers=1,
+    sleep_threshold=30
 )
 
 register_handlers(app)
 
-
 if __name__ == "__main__":
-    # Start web server in background
     threading.Thread(target=run_web, daemon=True).start()
-
     print("🤖 Bot running...")
     app.run()
