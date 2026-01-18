@@ -1,8 +1,13 @@
 import re
 import time
 import asyncio
+import os
+import tempfile
+
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
+from PIL import Image   # Pillow
+
 from mongo import (
     reset_user, create_user, add_file, get_user,
     set_thumbnail, get_thumbnail, delete_thumbnail,
@@ -16,7 +21,7 @@ async def progress_bar(current, total, message, start, label):
 
     percent = int(current * 100 / total)
 
-    # 🔧 FIX 1: TIME-BASED FLOOD CONTROL (CRITICAL)
+    # 🔧 TIME-BASED FLOOD CONTROL (CRITICAL)
     now = time.time()
     if not hasattr(progress_bar, "last"):
         progress_bar.last = 0
@@ -45,6 +50,27 @@ async def progress_bar(current, total, message, start, label):
         pass
 
 
+# ---------------- THUMBNAIL PREP (AUTO-RESIZE) ----------------
+def prepare_thumbnail(app: Client, file_id: str) -> str:
+    """
+    Downloads Telegram image, resizes to <=320x320,
+    converts to JPEG, returns local file path.
+    This makes thumbnails 100% Telegram-safe.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        thumb_path = tmp.name
+
+    # download original image from Telegram
+    app.download_media(file_id, file_name=thumb_path)
+
+    # open, resize, convert
+    img = Image.open(thumb_path).convert("RGB")
+    img.thumbnail((320, 320))   # Telegram limit
+    img.save(thumb_path, "JPEG", quality=85)
+
+    return thumb_path
+
+
 # ---------------- HELPERS ----------------
 def extract_episode(name):
     m = re.search(r"[Ee](\d+)", name)
@@ -52,6 +78,8 @@ def extract_episode(name):
 
 
 def register_handlers(app: Client):
+    ...
+
 
     # ---------- START ----------
     @app.on_message(filters.command("start"))
@@ -135,64 +163,94 @@ def register_handlers(app: Client):
         delete_thumbnail(msg.from_user.id)
         await msg.reply("🗑 Thumbnail removed")
 
-    # ---------- PROCESS ----------
-    @app.on_message(filters.command("process"))
-    async def process(_, msg):
-        user = get_user(msg.from_user.id)
-        if not user or not user.get("files"):
-            return await msg.reply("❌ No files")
+# ---------- PROCESS ----------
+@app.on_message(filters.command("process"))
+async def process(_, msg):
+    user = get_user(msg.from_user.id)
+    if not user or not user.get("files"):
+        return await msg.reply("❌ No files")
 
-        if not user.get("rename"):
-            return await msg.reply("❌ Use /rename first")
+    if not user.get("rename"):
+        return await msg.reply("❌ Use /rename first")
 
-        rename = user["rename"]
-        thumb = get_thumbnail(msg.from_user.id)
+    rename = user["rename"]
+    thumb = get_thumbnail(msg.from_user.id)
 
-        files = sorted(
-            user["files"],
-            key=lambda f: extract_episode(f["file_name"])
+    files = sorted(
+        user["files"],
+        key=lambda f: extract_episode(f["file_name"])
+    )
+
+    total_files = len(files)
+    total_size = sum(f.get("size", 0) for f in files)
+
+    batch_start = time.time()   # total batch time
+
+    for i, f in enumerate(files):
+        ep = rename["episode"] + i
+        filename = f"{rename['base']} S{rename['season']}E{ep:02d}.mkv"
+
+        original_msg = await app.get_messages(
+            chat_id=f["chat_id"],
+            message_ids=f["message_id"]
         )
 
-        total_files = len(files)
-        total_size = sum(f.get("size", 0) for f in files)
+        # -------- DOWNLOAD --------
+        dl_msg = await msg.reply("⬇️ Downloading...")
+        dl_start = time.time()
 
-        for i, f in enumerate(files):
-            ep = rename["episode"] + i
-            filename = f"{rename['base']} S{rename['season']}E{ep:02d}.mkv"
+        path = await app.download_media(
+            original_msg,
+            progress=progress_bar,
+            progress_args=(dl_msg, dl_start, "Downloading")
+        )
 
-            original_msg = await app.get_messages(
-                chat_id=f["chat_id"],
-                message_ids=f["message_id"]
-            )
+        # -------- UPLOAD --------
+        ul_msg = await msg.reply("⬆️ Uploading...")
+        ul_start = time.time()
 
-            # 🔧 FIX 2: SEPARATE STATUS MESSAGES
-            dl_msg = await msg.reply("⬇️ Downloading...")
-            dl_start = time.time()
+        thumb_path = None
+        if thumb:
+            try:
+                thumb_path = prepare_thumbnail(app, thumb)
+            except:
+                thumb_path = None
 
-            path = await app.download_media(
-                original_msg,
+        try:
+            await app.send_document(
+                msg.chat.id,
+                document=path,
+                thumb=thumb_path,
+                file_name=filename,
                 progress=progress_bar,
-                progress_args=(dl_msg, dl_start, "Downloading")
+                progress_args=(ul_msg, ul_start, "Uploading")
             )
-
-            ul_msg = await msg.reply("⬆️ Uploading...")
-            ul_start = time.time()
+        except Exception:
+            # 🔥 fallback: retry without thumbnail
+            await ul_msg.edit_text("⚠️ Thumbnail failed, retrying without it")
 
             await app.send_document(
                 msg.chat.id,
                 document=path,
-                thumb=thumb,
                 file_name=filename,
                 progress=progress_bar,
                 progress_args=(ul_msg, ul_start, "Uploading")
             )
 
-        elapsed = int(time.time() - dl_start)
-        total_mb = round(total_size / (1024 * 1024), 2)
+        # cleanup temp thumbnail
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
-        await msg.reply(
-            f"✅ Completed\n\n"
-            f"📦 Files: {total_files}\n"
-            f"💾 Size: {total_mb} MB\n"
-            f"⏱ Time: {elapsed}s"
+        # cleanup downloaded file (VERY IMPORTANT for Render)
+        if path and os.path.exists(path):
+            os.remove(path)
+
+    elapsed = int(time.time() - batch_start)
+    total_mb = round(total_size / (1024 * 1024), 2)
+
+    await msg.reply(
+        f"✅ Completed\n\n"
+        f"📦 Files: {total_files}\n"
+        f"💾 Size: {total_mb} MB\n"
+        f"⏱ Time: {elapsed}s"
     )
