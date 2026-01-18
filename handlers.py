@@ -35,6 +35,7 @@ async def progress_bar(current, total, message, start, label):
     except:
         pass
 
+    # 🔑 yield control to event loop
     await asyncio.sleep(0)
 
 
@@ -100,15 +101,20 @@ def register_handlers(app: Client):
         set_awaiting_thumb(msg.from_user.id, True)
         await msg.reply("🖼 Send thumbnail image")
 
-    @app.on_message(filters.photo)
+    @app.on_message(filters.photo | filters.document)
     async def save_thumb(_, msg):
         if not is_awaiting_thumb(msg.from_user.id):
             return
 
-        file_id = msg.photo.file_id
+        if msg.photo:
+            file_id = msg.photo.file_id
+        elif msg.document and msg.document.mime_type.startswith("image/"):
+            file_id = msg.document.file_id
+        else:
+            return await msg.reply("❌ Send an image")
+
         set_thumbnail(msg.from_user.id, file_id)
         set_awaiting_thumb(msg.from_user.id, False)
-
         await msg.reply("✅ Thumbnail saved")
 
     @app.on_message(filters.command("viewthumb"))
@@ -179,4 +185,4 @@ def register_handlers(app: Client):
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-        )
+    )
