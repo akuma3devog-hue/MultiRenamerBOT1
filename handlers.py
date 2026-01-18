@@ -95,24 +95,18 @@ def register_handlers(app: Client):
         )
         await msg.reply("✏️ Rename saved")
 
-    # ---------- THUMBNAIL ----------
+# ---------- THUMBNAIL ----------
     @app.on_message(filters.command("setthumb"))
     async def setthumb(_, msg):
         set_awaiting_thumb(msg.from_user.id, True)
-        await msg.reply("🖼 Send thumbnail image")
+        await msg.reply("🖼 Send thumbnail image (photo only)")
 
-    @app.on_message(filters.photo | filters.document)
+    @app.on_message(filters.photo)
     async def save_thumb(_, msg):
         if not is_awaiting_thumb(msg.from_user.id):
             return
 
-        if msg.photo:
-            file_id = msg.photo.file_id
-        elif msg.document and msg.document.mime_type.startswith("image/"):
-            file_id = msg.document.file_id
-        else:
-            return await msg.reply("❌ Send an image")
-
+        file_id = msg.photo.file_id
         set_thumbnail(msg.from_user.id, file_id)
         set_awaiting_thumb(msg.from_user.id, False)
         await msg.reply("✅ Thumbnail saved")
