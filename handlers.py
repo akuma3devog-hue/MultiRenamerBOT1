@@ -12,33 +12,55 @@ from mongo import (
     set_awaiting_thumb, is_awaiting_thumb
 )
 
+# =========================================================
+# 🔧 ADDED: PROCESS CONTROL + SPEED CACHE (SAFE)
+# =========================================================
+ACTIVE_PROCESSES = {}        # user_id -> True/False
+SPEED_CACHE = {}             # message_id -> (last_bytes, last_time)
+
 # ---------------- PROGRESS BAR ----------------
 async def progress_bar(current, total, message, start, label):
     if total == 0:
         return
 
     percent = int(current * 100 / total)
-
     now = time.time()
+
     if not hasattr(progress_bar, "last"):
         progress_bar.last = 0
 
-    # Flood control (prevents freeze)
-    if now - progress_bar.last < 2 and percent != 100:
+    # 🔥 FAST BOT STYLE: update every ~5 seconds
+    if now - progress_bar.last < 5 and percent != 100:
         return
-
     progress_bar.last = now
+
+    # ---------------- SPEED CALC (ADDED) ----------------
+    last = SPEED_CACHE.get(message.id)
+    speed = 0
+    if last:
+        last_bytes, last_time = last
+        diff_bytes = current - last_bytes
+        diff_time = now - last_time
+        if diff_time > 0:
+            speed = diff_bytes / diff_time
+
+    SPEED_CACHE[message.id] = (current, now)
+
+    speed_mb = speed / (1024 * 1024)
+    total_mb = total / (1024 * 1024)
+    current_mb = current / (1024 * 1024)
 
     blocks = int(percent / 5)
     bar = "█" * blocks + "░" * (20 - blocks)
 
-    elapsed = time.time() - start
-    speed = current / elapsed if elapsed > 0 else 0
     eta = int((total - current) / speed) if speed > 0 else 0
 
     try:
         await message.edit_text(
-            f"🚀 {label}\n{bar}\n{percent}% | ETA: {eta}s"
+            f"🚀 {label}\n"
+            f"{bar}\n"
+            f"{percent}% | {current_mb:.1f}/{total_mb:.1f} MB\n"
+            f"⚡ {speed_mb:.2f} MB/s | ETA: {eta}s"
         )
     except FloodWait as e:
         await asyncio.sleep(e.value)
@@ -52,7 +74,9 @@ def extract_episode(name):
     return int(m.group(1)) if m else 0
 
 
-# ================= REGISTER HANDLERS =================
+# =========================================================
+# ================= REGISTER HANDLERS =====================
+# =========================================================
 def register_handlers(app: Client):
 
     # ---------- START ----------
@@ -64,9 +88,22 @@ def register_handlers(app: Client):
             "✅ Batch started\n\n"
             "📂 Send files\n"
             "/rename Name S1E1\n"
-            "/process\n\n"
+            "/process\n"
+            "/cancel\n\n"
             "/setthumb • /viewthumb • /deletethumb"
         )
+
+    # =====================================================
+    # 🔧 ADDED: CANCEL COMMAND (SAFE)
+    # =====================================================
+    @app.on_message(filters.command("cancel"))
+    async def cancel(_, msg):
+        user_id = msg.from_user.id
+        if not ACTIVE_PROCESSES.get(user_id):
+            return await msg.reply("⚠️ No active process to cancel")
+
+        ACTIVE_PROCESSES[user_id] = False
+        await msg.reply("🛑 Process cancelled")
 
     # ---------- FILE UPLOAD ----------
     @app.on_message(filters.document | filters.video)
@@ -140,57 +177,69 @@ def register_handlers(app: Client):
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
     async def process(_, msg):
-        user = get_user(msg.from_user.id)
+        user_id = msg.from_user.id
+        ACTIVE_PROCESSES[user_id] = True   # 🔧 ADDED
+
+        user = get_user(user_id)
         if not user or not user.get("files"):
+            ACTIVE_PROCESSES.pop(user_id, None)
             return await msg.reply("❌ No files")
 
         if not user.get("rename"):
+            ACTIVE_PROCESSES.pop(user_id, None)
             return await msg.reply("❌ Use /rename first")
 
         rename = user["rename"]
-        thumb = get_thumbnail(msg.from_user.id)
+        thumb = get_thumbnail(user_id)
 
-        files = sorted(
-            user["files"],
-            key=lambda f: extract_episode(f["file_name"])
-        )
-
+        files = sorted(user["files"], key=lambda f: extract_episode(f["file_name"]))
         total_files = len(files)
         total_size = sum(f.get("size", 0) for f in files)
-        batch_start = time.time()
 
-        # 🔥 FORCE DOWNLOADS FOLDER
+        batch_start = time.time()
+        status = await msg.reply("🚀 Starting process...")
+
         download_dir = "downloads"
         os.makedirs(download_dir, exist_ok=True)
 
         try:
-            for i, f in enumerate(files):
+            for i, f in enumerate(files, start=1):
+
+                # 🔧 ADDED: CANCEL CHECK
+                if not ACTIVE_PROCESSES.get(user_id):
+                    await status.edit_text("🛑 Process cancelled by user")
+                    break
+
                 filename = (
                     f"{rename['base']} "
-                    f"S{rename['season']}E{rename['episode'] + i:02d}.mkv"
+                    f"S{rename['season']}E{rename['episode'] + i - 1:02d}.mkv"
                 )
 
                 file_path = os.path.join(download_dir, filename)
 
-                original_msg = await app.get_messages(
-                    f["chat_id"],
-                    f["message_id"]
+                original_msg = await app.get_messages(f["chat_id"], f["message_id"])
+
+                await status.edit_text(
+                    f"🚀 Processing {i}/{total_files}\n"
+                    f"⬇️ Downloading\n"
+                    f"📄 {filename}"
                 )
 
-                # -------- DOWNLOAD --------
-                dl_msg = await msg.reply("⬇️ Downloading...")
                 path = await app.download_media(
                     original_msg,
                     file_name=file_path,
                     progress=progress_bar,
-                    progress_args=(dl_msg, time.time(), "Downloading")
+                    progress_args=(status, time.time(), "Downloading")
                 )
 
                 if not path or not os.path.exists(path):
-                    return await msg.reply("❌ Download failed")
+                    continue
 
-                # -------- UPLOAD --------
-                ul_msg = await msg.reply("⬆️ Uploading...")
+                await status.edit_text(
+                    f"🚀 Processing {i}/{total_files}\n"
+                    f"⬆️ Uploading\n"
+                    f"📄 {filename}"
+                )
 
                 try:
                     await app.send_document(
@@ -199,7 +248,7 @@ def register_handlers(app: Client):
                         thumb=thumb,
                         file_name=filename,
                         progress=progress_bar,
-                        progress_args=(ul_msg, time.time(), "Uploading")
+                        progress_args=(status, time.time(), "Uploading")
                     )
                 except Exception:
                     await app.send_document(
@@ -207,15 +256,17 @@ def register_handlers(app: Client):
                         document=path,
                         file_name=filename,
                         progress=progress_bar,
-                        progress_args=(ul_msg, time.time(), "Uploading")
+                        progress_args=(status, time.time(), "Uploading")
                     )
 
-                # -------- PER-FILE CLEANUP --------
                 if os.path.exists(path):
                     os.remove(path)
 
         finally:
-            # 🔥 FINAL SAFETY CLEANUP (CRASH-SAFE)
+            # 🔧 CLEANUP
+            ACTIVE_PROCESSES.pop(user_id, None)
+            SPEED_CACHE.clear()
+
             if os.path.exists(download_dir):
                 for f in os.listdir(download_dir):
                     try:
@@ -226,12 +277,13 @@ def register_handlers(app: Client):
         elapsed = int(time.time() - batch_start)
         total_mb = round(total_size / (1024 * 1024), 2)
 
-        reset_user(msg.from_user.id)
-        create_user(msg.from_user.id)
+        # 🔧 AUTO MONGO CLEANUP (ADDED)
+        reset_user(user_id)
+        create_user(user_id)
 
-        await msg.reply(
+        await status.edit_text(
             f"✅ Completed\n\n"
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-    )
+            )
