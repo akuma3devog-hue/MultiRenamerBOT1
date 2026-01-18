@@ -148,7 +148,7 @@ def register_handlers(app: Client):
             return await msg.reply("❌ Use /rename first")
 
         rename = user["rename"]
-        thumb = get_thumbnail(msg.from_user.id)   # file_id or None
+        thumb = get_thumbnail(msg.from_user.id)
 
         files = sorted(
             user["files"],
@@ -157,107 +157,71 @@ def register_handlers(app: Client):
 
         total_files = len(files)
         total_size = sum(f.get("size", 0) for f in files)
-
         batch_start = time.time()
-        status = await msg.reply("🚀 Starting process...")
 
+        # 🔥 FORCE DOWNLOADS FOLDER
         download_dir = "downloads"
         os.makedirs(download_dir, exist_ok=True)
 
-        server_copy_count = 0
-        fallback_count = 0
-
-        for i, f in enumerate(files, start=1):
-            filename = (
-                f"{rename['base']} "
-                f"S{rename['season']}E{rename['episode'] + i - 1:02d}.mkv"
-            )
-
-            original_msg = await app.get_messages(
-                f["chat_id"],
-                f["message_id"]
-            )
-
-            # ================= SERVER COPY =================
-            try:
-                await status.edit_text(
-                    f"🚀 Processing {i}/{total_files}\n"
-                    f"⚡ Server copy\n"
-                    f"📄 {filename}"
+        try:
+            for i, f in enumerate(files):
+                filename = (
+                    f"{rename['base']} "
+                    f"S{rename['season']}E{rename['episode'] + i:02d}.mkv"
                 )
 
-                # try WITH thumbnail
-                await app.send_document(
-                    chat_id=msg.chat.id,
-                    document=original_msg.document.file_id,
-                    file_name=filename,
-                    thumb=thumb
+                file_path = os.path.join(download_dir, filename)
+
+                original_msg = await app.get_messages(
+                    f["chat_id"],
+                    f["message_id"]
                 )
 
-                server_copy_count += 1
-                continue
+                # -------- DOWNLOAD --------
+                dl_msg = await msg.reply("⬇️ Downloading...")
+                path = await app.download_media(
+                    original_msg,
+                    file_name=file_path,
+                    progress=progress_bar,
+                    progress_args=(dl_msg, time.time(), "Downloading")
+                )
 
-            except Exception:
-                # retry WITHOUT thumbnail (very important)
+                if not path or not os.path.exists(path):
+                    return await msg.reply("❌ Download failed")
+
+                # -------- UPLOAD --------
+                ul_msg = await msg.reply("⬆️ Uploading...")
+
                 try:
                     await app.send_document(
-                        chat_id=msg.chat.id,
-                        document=original_msg.document.file_id,
-                        file_name=filename
+                        msg.chat.id,
+                        document=path,
+                        thumb=thumb,
+                        file_name=filename,
+                        progress=progress_bar,
+                        progress_args=(ul_msg, time.time(), "Uploading")
+                    )
+                except Exception:
+                    await app.send_document(
+                        msg.chat.id,
+                        document=path,
+                        file_name=filename,
+                        progress=progress_bar,
+                        progress_args=(ul_msg, time.time(), "Uploading")
                     )
 
-                    server_copy_count += 1
-                    continue
+                # -------- PER-FILE CLEANUP --------
+                if os.path.exists(path):
+                    os.remove(path)
 
-                except Exception:
-                    pass   # real fallback below
-
-            # ================= FALLBACK =================
-            fallback_count += 1
-            file_path = os.path.join(download_dir, filename)
-
-            await status.edit_text(
-                f"🚀 Processing {i}/{total_files}\n"
-                f"⬇️ Downloading (fallback)\n"
-                f"📄 {filename}"
-            )
-
-            path = await app.download_media(
-                original_msg,
-                file_name=file_path,
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Downloading")
-            )
-
-            if not path or not os.path.exists(path):
-                continue
-
-            await status.edit_text(
-                f"🚀 Processing {i}/{total_files}\n"
-                f"⬆️ Uploading (fallback)\n"
-                f"📄 {filename}"
-            )
-
-            await app.send_document(
-                msg.chat.id,
-                document=path,
-                file_name=filename,
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Uploading")
-            )
-
-            try:
-                os.remove(path)
-            except:
-                pass
-
-        # ================= FINAL CLEANUP =================
-        if os.path.exists(download_dir):
-            for f in os.listdir(download_dir):
-                try:
-                    os.remove(os.path.join(download_dir, f))
-                except:
-                    pass
+        finally:
+            # 🔥 FINAL SAFETY CLEANUP (CRASH-SAFE)
+            if os.path.exists(download_dir):
+                for f in os.listdir(download_dir):
+                    try:
+                        os.remove(os.path.join(download_dir, f))
+                    except:
+                        pass
 
         elapsed = int(time.time() - batch_start)
         total_mb = round(total_size / (1024 * 1024), 2)
@@ -265,11 +229,9 @@ def register_handlers(app: Client):
         reset_user(msg.from_user.id)
         create_user(msg.from_user.id)
 
-        await status.edit_text(
+        await msg.reply(
             f"✅ Completed\n\n"
             f"📦 Files: {total_files}\n"
-            f"⚡ Server copy: {server_copy_count}\n"
-            f"🐢 Fallback: {fallback_count}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-        )
+    )
