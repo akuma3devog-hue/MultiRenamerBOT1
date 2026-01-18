@@ -26,7 +26,9 @@ app = Client(
     "renamer_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    workers=1,          # 🔧 REQUIRED for 4GB stability
+    sleep_threshold=30  # 🔧 REQUIRED for FloodWait safety
 )
 
 register_handlers(app)
