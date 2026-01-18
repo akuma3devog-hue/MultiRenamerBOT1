@@ -34,7 +34,7 @@ async def progress_bar(current, total, message, start, label):
         return
     progress_bar.last = now
 
-    # ---------------- SPEED CALC (ADDED) ----------------
+    # ---------------- SPEED CALC ----------------
     last = SPEED_CACHE.get(message.id)
     speed = 0
     if last:
@@ -90,12 +90,10 @@ def register_handlers(app: Client):
             "/rename Name S1E1\n"
             "/process\n"
             "/cancel\n\n"
-            "/setthumb • /viewthumb • /deletethumb"
+            "/setthumb • /changethumb • /viewthumb • /deletethumb"
         )
 
-    # =====================================================
-    # 🔧 ADDED: CANCEL COMMAND (SAFE)
-    # =====================================================
+    # ---------- CANCEL ----------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         user_id = msg.from_user.id
@@ -146,6 +144,12 @@ def register_handlers(app: Client):
         set_awaiting_thumb(msg.from_user.id, True)
         await msg.reply("🖼 Send thumbnail image")
 
+    # 🔧 ADDED: CHANGE THUMBNAIL
+    @app.on_message(filters.command("changethumb"))
+    async def changethumb(_, msg):
+        set_awaiting_thumb(msg.from_user.id, True)
+        await msg.reply("🖼 Send new thumbnail image (will replace old one)")
+
     @app.on_message(filters.photo | filters.document)
     async def save_thumb(_, msg):
         if not is_awaiting_thumb(msg.from_user.id):
@@ -178,7 +182,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.command("process"))
     async def process(_, msg):
         user_id = msg.from_user.id
-        ACTIVE_PROCESSES[user_id] = True   # 🔧 ADDED
+        ACTIVE_PROCESSES[user_id] = True
 
         user = get_user(user_id)
         if not user or not user.get("files"):
@@ -190,7 +194,7 @@ def register_handlers(app: Client):
             return await msg.reply("❌ Use /rename first")
 
         rename = user["rename"]
-        thumb = get_thumbnail(user_id)
+        thumb_id = get_thumbnail(user_id)
 
         files = sorted(user["files"], key=lambda f: extract_episode(f["file_name"]))
         total_files = len(files)
@@ -202,10 +206,15 @@ def register_handlers(app: Client):
         download_dir = "downloads"
         os.makedirs(download_dir, exist_ok=True)
 
+        # 🔧 ADDED: DOWNLOAD THUMB ONCE (CRITICAL FIX)
+        thumb_path = None
+        if thumb_id:
+            thumb_path = os.path.join(download_dir, "thumb.jpg")
+            await app.download_media(thumb_id, file_name=thumb_path)
+
         try:
             for i, f in enumerate(files, start=1):
 
-                # 🔧 ADDED: CANCEL CHECK
                 if not ACTIVE_PROCESSES.get(user_id):
                     await status.edit_text("🛑 Process cancelled by user")
                     break
@@ -216,7 +225,6 @@ def register_handlers(app: Client):
                 )
 
                 file_path = os.path.join(download_dir, filename)
-
                 original_msg = await app.get_messages(f["chat_id"], f["message_id"])
 
                 await status.edit_text(
@@ -245,7 +253,7 @@ def register_handlers(app: Client):
                     await app.send_document(
                         msg.chat.id,
                         document=path,
-                        thumb=thumb,
+                        thumb=thumb_path,
                         file_name=filename,
                         progress=progress_bar,
                         progress_args=(status, time.time(), "Uploading")
@@ -263,9 +271,11 @@ def register_handlers(app: Client):
                     os.remove(path)
 
         finally:
-            # 🔧 CLEANUP
             ACTIVE_PROCESSES.pop(user_id, None)
             SPEED_CACHE.clear()
+
+            if thumb_path and os.path.exists(thumb_path):
+                os.remove(thumb_path)
 
             if os.path.exists(download_dir):
                 for f in os.listdir(download_dir):
@@ -277,7 +287,6 @@ def register_handlers(app: Client):
         elapsed = int(time.time() - batch_start)
         total_mb = round(total_size / (1024 * 1024), 2)
 
-        # 🔧 AUTO MONGO CLEANUP (ADDED)
         reset_user(user_id)
         create_user(user_id)
 
@@ -286,4 +295,4 @@ def register_handlers(app: Client):
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-            )
+    )
