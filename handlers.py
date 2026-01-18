@@ -2,6 +2,7 @@ import re
 import time
 import asyncio
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 from mongo import (
     reset_user, create_user, add_file, get_user,
     set_thumbnail, get_thumbnail, delete_thumbnail,
@@ -15,9 +16,15 @@ async def progress_bar(current, total, message, start, label):
 
     percent = int(current * 100 / total)
 
-    # 🔒 STRONG FLOOD CONTROL
-    if percent % 10 != 0 and percent != 100:
+    # 🔧 FIX 1: TIME-BASED FLOOD CONTROL (CRITICAL)
+    now = time.time()
+    if not hasattr(progress_bar, "last"):
+        progress_bar.last = 0
+
+    if now - progress_bar.last < 2 and percent != 100:
         return
+
+    progress_bar.last = now
 
     blocks = int(percent / 5)
     bar = "█" * blocks + "░" * (20 - blocks)
@@ -32,11 +39,10 @@ async def progress_bar(current, total, message, start, label):
             f"{bar}\n"
             f"{percent}% | ETA: {eta}s"
         )
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
     except:
         pass
-
-    # 🔑 yield control to event loop
-    await asyncio.sleep(0)
 
 
 # ---------------- HELPERS ----------------
@@ -95,18 +101,24 @@ def register_handlers(app: Client):
         )
         await msg.reply("✏️ Rename saved")
 
-# ---------- THUMBNAIL ----------
+    # ---------- THUMBNAIL ----------
     @app.on_message(filters.command("setthumb"))
     async def setthumb(_, msg):
         set_awaiting_thumb(msg.from_user.id, True)
-        await msg.reply("🖼 Send thumbnail image (photo only)")
+        await msg.reply("🖼 Send thumbnail image")
 
-    @app.on_message(filters.photo)
+    @app.on_message(filters.photo | filters.document)
     async def save_thumb(_, msg):
         if not is_awaiting_thumb(msg.from_user.id):
             return
 
-        file_id = msg.photo.file_id
+        if msg.photo:
+            file_id = msg.photo.file_id
+        elif msg.document and msg.document.mime_type.startswith("image/"):
+            file_id = msg.document.file_id
+        else:
+            return await msg.reply("❌ Send an image")
+
         set_thumbnail(msg.from_user.id, file_id)
         set_awaiting_thumb(msg.from_user.id, False)
         await msg.reply("✅ Thumbnail saved")
@@ -144,9 +156,6 @@ def register_handlers(app: Client):
         total_files = len(files)
         total_size = sum(f.get("size", 0) for f in files)
 
-        status = await msg.reply("🚀 Preparing...")
-        start = time.time()
-
         for i, f in enumerate(files):
             ep = rename["episode"] + i
             filename = f"{rename['base']} S{rename['season']}E{ep:02d}.mkv"
@@ -156,11 +165,18 @@ def register_handlers(app: Client):
                 message_ids=f["message_id"]
             )
 
+            # 🔧 FIX 2: SEPARATE STATUS MESSAGES
+            dl_msg = await msg.reply("⬇️ Downloading...")
+            dl_start = time.time()
+
             path = await app.download_media(
                 original_msg,
                 progress=progress_bar,
-                progress_args=(status, start, "Downloading")
+                progress_args=(dl_msg, dl_start, "Downloading")
             )
+
+            ul_msg = await msg.reply("⬆️ Uploading...")
+            ul_start = time.time()
 
             await app.send_document(
                 msg.chat.id,
@@ -168,13 +184,13 @@ def register_handlers(app: Client):
                 thumb=thumb,
                 file_name=filename,
                 progress=progress_bar,
-                progress_args=(status, time.time(), "Uploading")
+                progress_args=(ul_msg, ul_start, "Uploading")
             )
 
-        elapsed = int(time.time() - start)
+        elapsed = int(time.time() - dl_start)
         total_mb = round(total_size / (1024 * 1024), 2)
 
-        await status.edit_text(
+        await msg.reply(
             f"✅ Completed\n\n"
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
