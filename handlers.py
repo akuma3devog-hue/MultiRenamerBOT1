@@ -1,7 +1,13 @@
 import re
 import time
 import asyncio
+import os
+import tempfile
+
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
+from PIL import Image
+
 from mongo import (
     reset_user, create_user, add_file, get_user,
     set_thumbnail, get_thumbnail, delete_thumbnail,
@@ -15,9 +21,15 @@ async def progress_bar(current, total, message, start, label):
 
     percent = int(current * 100 / total)
 
-    # 🔒 STRONG FLOOD CONTROL
-    if percent % 10 != 0 and percent != 100:
+    now = time.time()
+    if not hasattr(progress_bar, "last"):
+        progress_bar.last = 0
+
+    # 🔒 STRONG FLOOD CONTROL (NO FREEZE)
+    if now - progress_bar.last < 2 and percent != 100:
         return
+
+    progress_bar.last = now
 
     blocks = int(percent / 5)
     bar = "█" * blocks + "░" * (20 - blocks)
@@ -32,11 +44,24 @@ async def progress_bar(current, total, message, start, label):
             f"{bar}\n"
             f"{percent}% | ETA: {eta}s"
         )
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
     except:
         pass
 
-    # 🔑 yield control to event loop
-    await asyncio.sleep(0)
+
+# ---------------- THUMBNAIL PREP ----------------
+def prepare_thumbnail(app: Client, file_id: str) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        thumb_path = tmp.name
+
+    app.download_media(file_id, file_name=thumb_path)
+
+    img = Image.open(thumb_path).convert("RGB")
+    img.thumbnail((320, 320))          # TELEGRAM SAFE
+    img.save(thumb_path, "JPEG", quality=85)
+
+    return thumb_path
 
 
 # ---------------- HELPERS ----------------
@@ -45,6 +70,7 @@ def extract_episode(name):
     return int(m.group(1)) if m else 0
 
 
+# ================= REGISTER HANDLERS =================
 def register_handlers(app: Client):
 
     # ---------- START ----------
@@ -147,42 +173,83 @@ def register_handlers(app: Client):
             key=lambda f: extract_episode(f["file_name"])
         )
 
+        # -------- STATS --------
         total_files = len(files)
         total_size = sum(f.get("size", 0) for f in files)
-
-        status = await msg.reply("🚀 Preparing...")
-        start = time.time()
+        batch_start = time.time()
 
         for i, f in enumerate(files):
-            ep = rename["episode"] + i
-            filename = f"{rename['base']} S{rename['season']}E{ep:02d}.mkv"
+            filename = (
+                f"{rename['base']} "
+                f"S{rename['season']}E{rename['episode'] + i:02d}.mkv"
+            )
 
             original_msg = await app.get_messages(
-                chat_id=f["chat_id"],
-                message_ids=f["message_id"]
+                f["chat_id"],
+                f["message_id"]
             )
+
+            # -------- DOWNLOAD --------
+            dl_msg = await msg.reply("⬇️ Downloading...")
+            dl_start = time.time()
 
             path = await app.download_media(
                 original_msg,
                 progress=progress_bar,
-                progress_args=(status, start, "Downloading")
+                progress_args=(dl_msg, dl_start, "Downloading")
             )
 
-            await app.send_document(
-                msg.chat.id,
-                document=path,
-                thumb=thumb,
-                file_name=filename,
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Uploading")
-            )
+            # -------- UPLOAD --------
+            ul_msg = await msg.reply("⬆️ Uploading...")
+            ul_start = time.time()
 
-        elapsed = int(time.time() - start)
+            thumb_path = None
+            if thumb:
+                try:
+                    thumb_path = prepare_thumbnail(app, thumb)
+                except:
+                    thumb_path = None
+
+            try:
+                await app.send_document(
+                    msg.chat.id,
+                    document=path,
+                    thumb=thumb_path,
+                    file_name=filename,
+                    progress=progress_bar,
+                    progress_args=(ul_msg, ul_start, "Uploading")
+                )
+            except Exception:
+                # 🔥 NEVER FREEZE: retry without thumbnail
+                await ul_msg.edit_text(
+                    "⚠️ Thumbnail failed, retrying without it"
+                )
+                await app.send_document(
+                    msg.chat.id,
+                    document=path,
+                    file_name=filename,
+                    progress=progress_bar,
+                    progress_args=(ul_msg, ul_start, "Uploading")
+                )
+
+            # -------- CLEANUP --------
+            if thumb_path and os.path.exists(thumb_path):
+                os.remove(thumb_path)
+
+            if path and os.path.exists(path):
+                os.remove(path)
+
+        # -------- FINAL STATS --------
+        elapsed = int(time.time() - batch_start)
         total_mb = round(total_size / (1024 * 1024), 2)
 
-        await status.edit_text(
+        # -------- RESET USER DATA --------
+        reset_user(msg.from_user.id)
+        create_user(msg.from_user.id)
+
+        await msg.reply(
             f"✅ Completed\n\n"
             f"📦 Files: {total_files}\n"
             f"💾 Size: {total_mb} MB\n"
             f"⏱ Time: {elapsed}s"
-    )
+            )
