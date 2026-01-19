@@ -8,25 +8,25 @@ from pyrogram.errors import FloodWait
 
 from mongo import get_thumbnail, set_thumbnail
 
-# ==========================
+# =========================================================
 # CONFIG
-# ==========================
+# =========================================================
 DOWNLOAD_DIR = "thumb_downloads"
-THUMB_TIMEOUT = 300  # 5 minutes
+THUMB_TIMEOUT = 300  # 5 minutes inactivity
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ==========================
-# STATE
-# ==========================
-THUMB_MODE = set()                 # user_ids in thumb session
-THUMB_QUEUE = {}                   # user_id -> list of files
-ACTIVE_THUMB = {}                  # user_id -> bool
-LAST_ACTIVE = {}                   # user_id -> last activity time
-SPEED_CACHE = {}                   # message_id -> speed calc
+# =========================================================
+# STATE (ISOLATED)
+# =========================================================
+THUMB_MODE = set()          # users in thumbnail session
+THUMB_QUEUE = {}            # user_id -> list of files
+ACTIVE_THUMB = {}           # user_id -> bool (running apply)
+LAST_ACTIVE = {}            # user_id -> timestamp
+SPEED_CACHE = {}            # message_id -> (bytes, time)
 
-# ==========================
+# =========================================================
 # HELPERS
-# ==========================
+# =========================================================
 async def safe_edit(msg, text):
     try:
         await msg.edit_text(text)
@@ -64,39 +64,47 @@ async def progress_bar(current, total, message, start, label):
 
     await safe_edit(
         message,
-        f"🚀 {label}\n{bar}\n{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA {eta}s"
+        f"🚀 {label}\n"
+        f"{bar}\n"
+        f"{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA {eta}s"
     )
 
 
-def reset_thumb(uid):
+def cleanup_user(uid):
     THUMB_QUEUE.pop(uid, None)
     ACTIVE_THUMB.pop(uid, None)
     LAST_ACTIVE.pop(uid, None)
     SPEED_CACHE.clear()
 
 
-# ==========================
+# =========================================================
 # REGISTER
-# ==========================
+# =========================================================
 def register_thumbnail(app: Client):
 
-    # -------- START SESSION --------
+    # -----------------------------------------------------
+    # START SESSION
+    # -----------------------------------------------------
     @app.on_message(filters.command("thumbstart"))
     async def thumbstart(_, msg):
         uid = msg.from_user.id
+
         THUMB_MODE.add(uid)
         THUMB_QUEUE[uid] = []
         LAST_ACTIVE[uid] = time.time()
 
         await msg.reply(
             "🖼 **Thumbnail Session Started**\n\n"
-            "• Send / forward files (they will be queued)\n"
-            "• Use /thumbset to set or change thumbnail\n"
-            "• Use /thumbapply to apply thumbnail\n"
-            "• /thumbstop to exit"
+            "• Send / forward files → they will be queued\n"
+            "• /thumbset → set or replace thumbnail\n"
+            "• /thumbapply → apply thumbnail to ALL queued files\n"
+            "• /thumbstop → exit session\n\n"
+            "⚠️ Nothing uploads automatically"
         )
 
-    # -------- SET / REPLACE THUMB --------
+    # -----------------------------------------------------
+    # SET / REPLACE THUMBNAIL
+    # -----------------------------------------------------
     @app.on_message(filters.command("thumbset"))
     async def thumbset(_, msg):
         uid = msg.from_user.id
@@ -104,7 +112,7 @@ def register_thumbnail(app: Client):
             return await msg.reply("⚠️ Thumbnail session not active")
 
         LAST_ACTIVE[uid] = time.time()
-        await msg.reply("📸 Send thumbnail image now")
+        await msg.reply("📸 Send the thumbnail image now")
 
     @app.on_message(filters.photo)
     async def save_thumb(_, msg):
@@ -114,11 +122,13 @@ def register_thumbnail(app: Client):
 
         set_thumbnail(uid, msg.photo.file_id)
         LAST_ACTIVE[uid] = time.time()
-        await msg.reply("✅ Thumbnail saved (will be reused)")
+        await msg.reply("✅ Thumbnail saved (reusable)")
 
-    # -------- QUEUE FILES --------
-    @app.on_message(filters.document | filters.video, group=-1)
-async def queue_files(_, msg):
+    # -----------------------------------------------------
+    # QUEUE FILES (NO DOWNLOAD / NO UPLOAD)
+    # -----------------------------------------------------
+    @app.on_message(filters.document | filters.video)
+    async def queue_files(_, msg):
         uid = msg.from_user.id
         if uid not in THUMB_MODE:
             return
@@ -135,40 +145,36 @@ async def queue_files(_, msg):
         LAST_ACTIVE[uid] = time.time()
         await msg.reply("📦 File queued for thumbnail")
 
-    # -------- APPLY THUMB --------
+    # -----------------------------------------------------
+    # APPLY THUMBNAIL (EXECUTOR)
+    # -----------------------------------------------------
     @app.on_message(filters.command("thumbapply"))
     async def thumbapply(_, msg):
         uid = msg.from_user.id
-
         if uid not in THUMB_MODE:
             return await msg.reply("⚠️ Thumbnail session not active")
 
-        files = THUMB_QUEUE.get(uid, [])
+        files = THUMB_QUEUE.get(uid)
         if not files:
             return await msg.reply("⚠️ No files queued")
 
         thumb = get_thumbnail(uid)
         if not thumb:
-            return await msg.reply("❌ No thumbnail set")
+            return await msg.reply("❌ No thumbnail set. Use /thumbset")
 
         ACTIVE_THUMB[uid] = True
-        LAST_ACTIVE[uid] = time.time()
-
-        status = await msg.reply("🚀 Applying thumbnails...")
+        status = await msg.reply("🚀 Applying thumbnail...")
         total = len(files)
 
         for i, f in enumerate(files, 1):
             if not ACTIVE_THUMB.get(uid):
                 break
 
-            # auto-timeout protection
-            if time.time() - LAST_ACTIVE.get(uid, 0) > THUMB_TIMEOUT:
-                break
-
             original = await app.get_messages(f["chat_id"], f["message_id"])
             filename = f["file_name"]
             path = os.path.join(DOWNLOAD_DIR, filename)
 
+            await safe_edit(status, f"⬇️ Downloading {i}/{total}")
             path = await app.download_media(
                 original,
                 file_name=path,
@@ -176,6 +182,7 @@ async def queue_files(_, msg):
                 progress_args=(status, time.time(), "Downloading")
             )
 
+            await safe_edit(status, f"⬆️ Uploading {i}/{total}")
             await app.send_document(
                 msg.chat.id,
                 document=path,
@@ -187,20 +194,29 @@ async def queue_files(_, msg):
 
             os.remove(path)
 
-        reset_thumb(uid)
-        await status.edit_text("✅ Thumbnail applied to all queued files")
-
-    # -------- STOP SESSION --------
-    @app.on_message(filters.command("thumbstop"))
-    async def thumbstop(_, msg):
-        uid = msg.from_user.id
+        cleanup_user(uid)
         THUMB_MODE.discard(uid)
-        reset_thumb(uid)
-        await msg.reply("❌ Thumbnail session ended")
+        await status.edit_text("✅ Thumbnail applied to all files")
 
-    # -------- CANCEL --------
+    # -----------------------------------------------------
+    # CANCEL RUNNING APPLY
+    # -----------------------------------------------------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         uid = msg.from_user.id
-        ACTIVE_THUMB[uid] = False
-        await msg.reply("🛑 Thumbnail process cancelled")
+        if uid in ACTIVE_THUMB:
+            ACTIVE_THUMB[uid] = False
+            await msg.reply("🛑 Thumbnail process cancelled")
+
+    # -----------------------------------------------------
+    # STOP SESSION
+    # -----------------------------------------------------
+    @app.on_message(filters.command("thumbstop"))
+    async def thumbstop(_, msg):
+        uid = msg.from_user.id
+        if uid not in THUMB_MODE:
+            return await msg.reply("⚠️ Thumbnail session not active")
+
+        cleanup_user(uid)
+        THUMB_MODE.discard(uid)
+        await msg.reply("❌ Thumbnail session ended")
