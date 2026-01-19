@@ -180,13 +180,13 @@ def register_handlers(app: Client):
         await msg.reply("📦 File queued")
 
     # ---------- MANUAL NAME ----------
-    @app.on_message(filters.text & ~filters.command)
-    async def manual_name(_, msg):
-        uid = msg.from_user.id
-        if MODE.get(uid) == "manual":
-            MANUAL_NAMES.setdefault(uid, []).append(msg.text)
-            await msg.reply("✅ Name saved")
-
+@app.on_message(filters.text & ~filters.regex(r"^/"))
+async def manual_name(_, msg):
+    uid = msg.from_user.id
+    if MODE.get(uid) == "manual":
+        MANUAL_NAMES.setdefault(uid, []).append(msg.text)
+        await msg.reply("✅ Name saved")
+        
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
     async def process(_, msg):
