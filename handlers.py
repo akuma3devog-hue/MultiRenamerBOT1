@@ -1,4 +1,3 @@
-# handlers.py
 import re
 import time
 import asyncio
@@ -7,27 +6,17 @@ import os
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 
-from mongo import (
-    reset_user, create_user, add_file, get_user
-)
+from mongo import reset_user, create_user, add_file, get_user
+from thumbnail import THUMB_MODE   # only for blocking
 
-# ⚠️ ONLY USED TO BLOCK RENAME DURING THUMB SESSION
-from thumbnail import THUMB_MODE
-
-# =========================================================
-# PROCESS + SPEED
-# =========================================================
 ACTIVE_PROCESSES = {}
 SPEED_CACHE = {}
 
-# =========================================================
-# RENAME MODE SYSTEM (UNCHANGED + SAFE)
-# =========================================================
 RENAMEMODE = set()
 RENAME_TYPE = {}
 MANUAL_NAME = {}
 
-# ---------------- PROGRESS BAR ----------------
+
 async def progress_bar(current, total, message, start, label):
     if total == 0:
         return
@@ -64,13 +53,12 @@ async def progress_bar(current, total, message, start, label):
         pass
 
 
-# ---------------- EPISODE DETECTION (IMPROVED) ----------------
 def extract_episode(name: str) -> int:
     patterns = [
-        r"[Ss]\d+[Ee](\d+)",      # S01E05
-        r"[Ee](\d+)",             # E05
-        r"[Ee]pisode\s*(\d+)",    # Episode 5
-        r"\b(\d{1,3})\b"          # fallback
+        r"[Ss]\d+[Ee](\d+)",
+        r"[Ee](\d+)",
+        r"[Ee]pisode\s*(\d+)",
+        r"\b(\d{1,3})\b"
     ]
     for p in patterns:
         m = re.search(p, name, re.IGNORECASE)
@@ -82,7 +70,6 @@ def extract_episode(name: str) -> int:
 # ================= REGISTER =================
 def register_handlers(app: Client):
 
-    # ---------- START ----------
     @app.on_message(filters.command("start"))
     async def start(_, msg):
         reset_user(msg.from_user.id)
@@ -100,7 +87,6 @@ def register_handlers(app: Client):
             "🖼 Thumbnail handled separately"
         )
 
-    # ---------- RENAME MODE ----------
     @app.on_message(filters.command("renamestart"))
     async def renamestart(_, msg):
         RENAMEMODE.add(msg.from_user.id)
@@ -134,34 +120,31 @@ def register_handlers(app: Client):
         RENAME_TYPE[uid] = "auto"
         await msg.reply("🤖 Automatic rename enabled")
 
-    # ---------- CANCEL ----------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         ACTIVE_PROCESSES[msg.from_user.id] = False
         await msg.reply("🛑 Cancel requested")
 
-    # ---------- FILE QUEUE (NO EXECUTION) ----------
-@app.on_message(filters.document | filters.video)
-async def queue_files(_, msg):
-    uid = msg.from_user.id
+    # ---------- FILE QUEUE ----------
+    @app.on_message(filters.document | filters.video)
+    async def queue_files(_, msg):
+        uid = msg.from_user.id
 
-    # 🚫 BLOCK during thumbnail session
-    if uid in THUMB_MODE:
-        return
+        if uid in THUMB_MODE:
+            return
 
-    # 🚫 BLOCK if rename mode is NOT active
-    if uid not in RENAMEMODE:
-        return
+        if uid not in RENAMEMODE:
+            return
 
-    media = msg.document or msg.video
-    add_file(uid, {
-        "chat_id": msg.chat.id,
-        "message_id": msg.id,
-        "file_name": media.file_name or "file.mkv",
-        "size": media.file_size or 0
-    })
+        media = msg.document or msg.video
+        add_file(uid, {
+            "chat_id": msg.chat.id,
+            "message_id": msg.id,
+            "file_name": media.file_name or "file.mkv",
+            "size": media.file_size or 0
+        })
 
-    await msg.reply("📦 File queued")
+        await msg.reply("📦 File queued")
 
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
@@ -185,7 +168,6 @@ async def queue_files(_, msg):
                 break
 
             ep = extract_episode(f["file_name"])
-
             if RENAME_TYPE.get(uid) == "manual":
                 filename = MANUAL_NAME[uid]
             else:
@@ -215,5 +197,4 @@ async def queue_files(_, msg):
         SPEED_CACHE.clear()
         reset_user(uid)
         create_user(uid)
-
         await status.edit_text("✅ Rename completed")
