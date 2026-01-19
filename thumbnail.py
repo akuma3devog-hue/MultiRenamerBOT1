@@ -6,7 +6,7 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 
-from mongo import set_thumbnail, get_thumbnail
+from mongo import get_thumbnail
 
 # ==========================
 # CONFIG
@@ -19,8 +19,9 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # STATE
 # ==========================
 THUMB_MODE = {}          # user_id -> last_active_time
-THUMB_STATS = {}         # user_id -> stats dict
-SPEED_CACHE = {}         # message_id -> (bytes, time)
+CHANGE_MODE = set()     # users who issued /change
+THUMB_STATS = {}        # user_id -> stats
+SPEED_CACHE = {}        # progress cache
 
 # ==========================
 # HELPERS
@@ -59,27 +60,24 @@ async def progress_bar(current, total, message, start, label):
 
     speed_mb = speed / (1024 * 1024)
     eta = int((total - current) / speed) if speed > 0 else 0
-
     bar = "█" * (percent // 5) + "░" * (20 - percent // 5)
 
     await safe_edit(
         message,
-        f"🚀 {label}\n"
-        f"{bar}\n"
-        f"{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA: {eta}s"
+        f"🚀 {label}\n{bar}\n{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA: {eta}s"
     )
 
 
-def reset_stats(user_id):
-    THUMB_STATS[user_id] = {
+def reset_stats(uid):
+    THUMB_STATS[uid] = {
         "files": 0,
         "size": 0,
         "start": time.time()
     }
 
 
-def finish_stats(user_id):
-    stats = THUMB_STATS.pop(user_id, None)
+def finish_stats(uid):
+    stats = THUMB_STATS.pop(uid, None)
     if not stats:
         return None
 
@@ -94,8 +92,9 @@ def finish_stats(user_id):
     }
 
 
-async def exit_thumb_mode(app, msg, uid, auto=False):
+async def exit_thumb_mode(msg, uid, auto=False):
     THUMB_MODE.pop(uid, None)
+    CHANGE_MODE.discard(uid)
     SPEED_CACHE.clear()
 
     summary = finish_stats(uid)
@@ -111,13 +110,12 @@ async def exit_thumb_mode(app, msg, uid, auto=False):
         f"{'⏰ Auto-timeout' if auto else ''}"
     )
 
-
 # ==========================
 # REGISTER
 # ==========================
 def register_thumbnail(app: Client):
 
-    # -------- ENTER MODE --------
+    # -------- ENABLE MODE --------
     @app.on_message(filters.command("thumbmode"))
     async def thumbmode(_, msg):
         uid = msg.from_user.id
@@ -126,69 +124,63 @@ def register_thumbnail(app: Client):
 
         await msg.reply(
             "🖼 **Thumbnail Mode Enabled**\n\n"
-            "• Send ONE thumbnail image\n"
-            "• Then send / forward files\n"
-            "• Same thumbnail used for all files\n"
-            "• Replace thumbnail anytime\n"
+            "• Send files anytime\n"
+            "• Use /change to apply saved thumbnail\n"
+            "• Thumbnail is reused automatically\n"
             "• Auto-exits after 5 minutes\n\n"
             "/thumbstop to exit"
         )
 
-    # -------- EXIT MODE --------
+    # -------- CHANGE (EXECUTE) --------
+    @app.on_message(filters.command("change"))
+    async def change(_, msg):
+        uid = msg.from_user.id
+        if uid not in THUMB_MODE:
+            return await msg.reply("⚠️ Thumbnail mode not active")
+
+        thumb = get_thumbnail(uid)
+        if not thumb:
+            return await msg.reply("❌ No thumbnail saved")
+
+        CHANGE_MODE.add(uid)
+        THUMB_MODE[uid] = time.time()
+        await msg.reply("🔁 Send files now, thumbnail will be applied")
+
+    # -------- EXIT --------
     @app.on_message(filters.command("thumbstop"))
     async def thumbstop(_, msg):
         uid = msg.from_user.id
         if uid not in THUMB_MODE:
             return await msg.reply("⚠️ Thumbnail mode not active")
-        await exit_thumb_mode(app, msg, uid)
-
-    # -------- SAVE / REPLACE THUMB --------
-    @app.on_message(filters.photo)
-    async def save_thumb(_, msg):
-        uid = msg.from_user.id
-        if uid not in THUMB_MODE:
-            return
-
-        set_thumbnail(uid, msg.photo.file_id)
-        THUMB_MODE[uid] = time.time()
-
-        await msg.reply("✅ Thumbnail saved / replaced")
+        await exit_thumb_mode(msg, uid)
 
     # -------- HANDLE FILES --------
     @app.on_message(filters.document | filters.video)
     async def handle_files(_, msg):
         uid = msg.from_user.id
-        if uid not in THUMB_MODE:
+        if uid not in THUMB_MODE or uid not in CHANGE_MODE:
             return
 
-        # ⏰ AUTO TIMEOUT CHECK
         if time.time() - THUMB_MODE.get(uid, 0) > THUMB_TIMEOUT:
-            return await exit_thumb_mode(app, msg, uid, auto=True)
+            return await exit_thumb_mode(msg, uid, auto=True)
+
+        thumb = get_thumbnail(uid)
+        if not thumb:
+            return await msg.reply("❌ Thumbnail missing")
 
         THUMB_MODE[uid] = time.time()
-        thumb = get_thumbnail(uid)
-
-        if not thumb:
-            return await msg.reply("⚠️ Send thumbnail image first")
-
         media = msg.document or msg.video
         filename = media.file_name or "file"
 
         status = await msg.reply("⬇️ Downloading...")
-        file_path = os.path.join(DOWNLOAD_DIR, filename)
-
         path = await app.download_media(
             msg,
-            file_name=file_path,
+            file_name=os.path.join(DOWNLOAD_DIR, filename),
             progress=progress_bar,
             progress_args=(status, time.time(), "Downloading")
         )
 
-        if not path:
-            return await safe_edit(status, "❌ Download failed")
-
         await safe_edit(status, "⬆️ Uploading...")
-
         await app.send_document(
             msg.chat.id,
             document=path,
@@ -198,9 +190,8 @@ def register_thumbnail(app: Client):
             progress_args=(status, time.time(), "Uploading")
         )
 
-        size = os.path.getsize(path)
         THUMB_STATS[uid]["files"] += 1
-        THUMB_STATS[uid]["size"] += size
+        THUMB_STATS[uid]["size"] += os.path.getsize(path)
 
         os.remove(path)
         await safe_edit(status, "✅ Done")
