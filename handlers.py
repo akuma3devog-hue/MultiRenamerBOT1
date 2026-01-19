@@ -137,20 +137,20 @@ def register_handlers(app: Client):
 
     # ---------- FILE COLLECT ----------
     @app.on_message(filters.document | filters.video)
-async def upload(_, msg):
+    async def upload(_, msg):
 
-    # 🚫 BLOCK rename handler when thumbnail mode is active
-    if msg.from_user.id in THUMB_MODE:
-        return
+        # 🚫 BLOCK rename handler when thumbnail mode is active
+        if msg.from_user.id in THUMB_MODE:
+            return
 
-    add_file(msg.from_user.id, {
-        "chat_id": msg.chat.id,
-        "message_id": msg.id,
-        "file_name": (msg.document or msg.video).file_name or "file.mkv",
-        "size": (msg.document or msg.video).file_size or 0
-    })
+        add_file(msg.from_user.id, {
+            "chat_id": msg.chat.id,
+            "message_id": msg.id,
+            "file_name": (msg.document or msg.video).file_name or "file.mkv",
+            "size": (msg.document or msg.video).file_size or 0
+        })
 
-    await msg.reply("📂 Added")
+        await msg.reply("📂 Added")
 
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
