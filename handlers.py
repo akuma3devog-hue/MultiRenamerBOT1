@@ -10,6 +10,7 @@ from pyrogram.errors import FloodWait
 from mongo import (
     reset_user, create_user, add_file, get_user
 )
+from thumbnail import THUMB_MODE
 
 # =========================================================
 # PROCESS + SPEED
@@ -136,14 +137,20 @@ def register_handlers(app: Client):
 
     # ---------- FILE COLLECT ----------
     @app.on_message(filters.document | filters.video)
-    async def upload(_, msg):
-        add_file(msg.from_user.id, {
-            "chat_id": msg.chat.id,
-            "message_id": msg.id,
-            "file_name": (msg.document or msg.video).file_name or "file.mkv",
-            "size": (msg.document or msg.video).file_size or 0
-        })
-        await msg.reply("📂 Added")
+async def upload(_, msg):
+
+    # 🚫 BLOCK rename handler when thumbnail mode is active
+    if msg.from_user.id in THUMB_MODE:
+        return
+
+    add_file(msg.from_user.id, {
+        "chat_id": msg.chat.id,
+        "message_id": msg.id,
+        "file_name": (msg.document or msg.video).file_name or "file.mkv",
+        "size": (msg.document or msg.video).file_size or 0
+    })
+
+    await msg.reply("📂 Added")
 
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
