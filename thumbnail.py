@@ -1,17 +1,19 @@
 # thumbnail.py
 import os
-import time
 import asyncio
-
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 
+from mongo import (
+    set_thumbnail,
+    get_thumbnail,
+    delete_thumbnail
+)
+
 # ==========================
-# STATE
+# STATE (runtime only)
 # ==========================
 THUMB_MODE = set()          # user_ids in thumb mode
-USER_THUMB = {}             # user_id -> file_id
-
 DOWNLOAD_DIR = "thumb_downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -37,14 +39,13 @@ def register_thumbnail(app: Client):
     async def thumbmode(_, msg):
         user_id = msg.from_user.id
         THUMB_MODE.add(user_id)
-        USER_THUMB.pop(user_id, None)
 
         await msg.reply(
-            "🖼 **Thumbnail mode enabled**\n\n"
-            "1️⃣ Send ONE thumbnail image\n"
-            "2️⃣ Then send / forward files\n"
-            "3️⃣ I will re-upload with thumbnail\n\n"
-            "/thumbstop to exit"
+            "🖼 **Thumbnail Mode Enabled**\n\n"
+            "• Send a thumbnail image (once)\n"
+            "• Then send / forward files\n"
+            "• I will re-upload them with thumbnail\n\n"
+            "Use /thumbstop to exit"
         )
 
     # -------- EXIT THUMB MODE --------
@@ -52,28 +53,31 @@ def register_thumbnail(app: Client):
     async def thumbstop(_, msg):
         user_id = msg.from_user.id
         THUMB_MODE.discard(user_id)
-        USER_THUMB.pop(user_id, None)
-
         await msg.reply("❌ Thumbnail mode disabled")
 
-    # -------- RECEIVE THUMB IMAGE --------
+    # -------- SAVE / REPLACE THUMB --------
     @app.on_message(filters.photo)
-    async def save_thumbnail(_, msg):
+    async def save_thumb(_, msg):
         user_id = msg.from_user.id
         if user_id not in THUMB_MODE:
             return
 
-        USER_THUMB[user_id] = msg.photo.file_id
-        await msg.reply("✅ Thumbnail saved. Now send files.")
+        file_id = msg.photo.file_id
+        set_thumbnail(user_id, file_id)
 
-    # -------- HANDLE FILES --------
+        await msg.reply(
+            "✅ Thumbnail saved\n"
+            "📎 Now send files (or send another image to replace thumb)"
+        )
+
+    # -------- APPLY THUMB TO FILES --------
     @app.on_message(filters.document | filters.video)
-    async def apply_thumbnail(_, msg):
+    async def apply_thumb(_, msg):
         user_id = msg.from_user.id
         if user_id not in THUMB_MODE:
             return
 
-        thumb = USER_THUMB.get(user_id)
+        thumb = get_thumbnail(user_id)
         if not thumb:
             return await msg.reply("⚠️ Send a thumbnail image first")
 
@@ -84,15 +88,11 @@ def register_thumbnail(app: Client):
         file_path = os.path.join(DOWNLOAD_DIR, filename)
 
         # ---- DOWNLOAD ----
-        path = await app.download_media(
-            msg,
-            file_name=file_path
-        )
-
+        path = await app.download_media(msg, file_name=file_path)
         if not path or not os.path.exists(path):
             return await safe_edit(status, "❌ Download failed")
 
-        # ---- UPLOAD WITH THUMB ----
+        # ---- UPLOAD ----
         await safe_edit(status, "⬆️ Uploading with thumbnail...")
 
         try:
