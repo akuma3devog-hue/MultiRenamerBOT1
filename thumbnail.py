@@ -11,18 +11,17 @@ from mongo import get_thumbnail, set_thumbnail
 # ==========================
 # CONFIG
 # ==========================
-THUMB_TIMEOUT = 300  # 5 minutes
 DOWNLOAD_DIR = "thumb_downloads"
+THUMB_TIMEOUT = 300  # 5 minutes
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # ==========================
-# STATE (SESSION BASED)
+# STATE
 # ==========================
-THUMB_MODE = {}          # user_id -> last_active_time
-THUMB_QUEUE = {}         # user_id -> list of queued files
-ACTIVE_THUMB = {}        # user_id -> running flag
-THUMB_STATS = {}         # user_id -> stats
-SPEED_CACHE = {}         # progress cache
+THUMB_MODE = set()                 # user_ids in thumb session
+THUMB_QUEUE = {}                   # user_id -> list of files
+ACTIVE_THUMB = {}                  # user_id -> bool
+SPEED_CACHE = {}                   # message_id -> speed calc
 
 # ==========================
 # HELPERS
@@ -47,9 +46,8 @@ async def progress_bar(current, total, message, start, label):
     speed = 0
     if last:
         lb, lt = last
-        dt = now - lt
-        if dt > 0:
-            speed = (current - lb) / dt
+        if now - lt > 0:
+            speed = (current - lb) / (now - lt)
 
     SPEED_CACHE[message.id] = (current, now)
 
@@ -65,54 +63,15 @@ async def progress_bar(current, total, message, start, label):
 
     await safe_edit(
         message,
-        f"🚀 {label}\n"
-        f"{bar}\n"
-        f"{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA {eta}s"
+        f"🚀 {label}\n{bar}\n{percent}% | ⚡ {speed_mb:.2f} MB/s | ETA {eta}s"
     )
 
 
-def reset_stats(uid):
-    THUMB_STATS[uid] = {
-        "files": 0,
-        "size": 0,
-        "start": time.time()
-    }
-
-
-def finish_stats(uid):
-    stats = THUMB_STATS.pop(uid, None)
-    if not stats:
-        return None
-
-    elapsed = time.time() - stats["start"]
-    avg_speed = (stats["size"] / elapsed) if elapsed > 0 else 0
-
-    return {
-        "files": stats["files"],
-        "size_mb": stats["size"] / (1024 * 1024),
-        "time": int(elapsed),
-        "speed": avg_speed / (1024 * 1024)
-    }
-
-
-async def exit_thumb_mode(msg, uid, auto=False):
-    THUMB_MODE.pop(uid, None)
-    THUMB_QUEUE.pop(uid, None)
-    ACTIVE_THUMB.pop(uid, None)
+def reset_thumb(user_id):
+    THUMB_QUEUE.pop(user_id, None)
+    ACTIVE_THUMB.pop(user_id, None)
     SPEED_CACHE.clear()
 
-    summary = finish_stats(uid)
-    if not summary:
-        return await msg.reply("❌ Thumbnail session ended")
-
-    await msg.reply(
-        "🖼 **Thumbnail Summary**\n\n"
-        f"📦 Files: {summary['files']}\n"
-        f"💾 Size: {summary['size_mb']:.2f} MB\n"
-        f"⏱ Time: {summary['time']}s\n"
-        f"⚡ Avg speed: {summary['speed']:.2f} MB/s\n"
-        f"{'⏰ Auto-timeout' if auto else ''}"
-    )
 
 # ==========================
 # REGISTER
@@ -123,16 +82,15 @@ def register_thumbnail(app: Client):
     @app.on_message(filters.command("thumbstart"))
     async def thumbstart(_, msg):
         uid = msg.from_user.id
-        THUMB_MODE[uid] = time.time()
+        THUMB_MODE.add(uid)
         THUMB_QUEUE[uid] = []
-        reset_stats(uid)
 
         await msg.reply(
             "🖼 **Thumbnail Session Started**\n\n"
-            "• Send files → they will be queued\n"
-            "• /thumbset → set or replace thumbnail\n"
-            "• /thumbapply → apply thumbnail to ALL queued files\n"
-            "• /thumbstop → exit session\n"
+            "• Send / forward files (they will be queued)\n"
+            "• Use /thumbset to set thumbnail\n"
+            "• Use /thumbapply to apply thumbnail\n"
+            "• /thumbstop to exit"
         )
 
     # -------- SET / REPLACE THUMB --------
@@ -142,7 +100,7 @@ def register_thumbnail(app: Client):
         if uid not in THUMB_MODE:
             return await msg.reply("⚠️ Thumbnail session not active")
 
-        await msg.reply("🖼 Send thumbnail image now")
+        await msg.reply("📸 Send thumbnail image now")
 
     @app.on_message(filters.photo)
     async def save_thumb(_, msg):
@@ -151,7 +109,6 @@ def register_thumbnail(app: Client):
             return
 
         set_thumbnail(uid, msg.photo.file_id)
-        THUMB_MODE[uid] = time.time()
         await msg.reply("✅ Thumbnail saved")
 
     # -------- QUEUE FILES --------
@@ -165,21 +122,21 @@ def register_thumbnail(app: Client):
         THUMB_QUEUE.setdefault(uid, []).append({
             "chat_id": msg.chat.id,
             "message_id": msg.id,
-            "file_name": media.file_name or "file"
+            "file_name": media.file_name or "file.mkv",
+            "size": media.file_size or 0
         })
 
-        THUMB_MODE[uid] = time.time()
-        await msg.reply("📦 File queued")
+        await msg.reply("📦 File queued for thumbnail")
 
-    # -------- APPLY (EXECUTOR) --------
+    # -------- APPLY THUMB --------
     @app.on_message(filters.command("thumbapply"))
     async def thumbapply(_, msg):
         uid = msg.from_user.id
         if uid not in THUMB_MODE:
             return await msg.reply("⚠️ Thumbnail session not active")
 
-        queue = THUMB_QUEUE.get(uid, [])
-        if not queue:
+        files = THUMB_QUEUE.get(uid)
+        if not files:
             return await msg.reply("⚠️ No files queued")
 
         thumb = get_thumbnail(uid)
@@ -187,10 +144,10 @@ def register_thumbnail(app: Client):
             return await msg.reply("❌ No thumbnail set")
 
         ACTIVE_THUMB[uid] = True
-        status = await msg.reply("🚀 Applying thumbnail...")
-        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        status = await msg.reply("🚀 Applying thumbnails...")
+        total_files = len(files)
 
-        for f in queue:
+        for i, f in enumerate(files, 1):
             if not ACTIVE_THUMB.get(uid):
                 break
 
@@ -198,6 +155,7 @@ def register_thumbnail(app: Client):
             filename = f["file_name"]
             path = os.path.join(DOWNLOAD_DIR, filename)
 
+            await safe_edit(status, f"⬇️ Downloading {i}/{total_files}")
             path = await app.download_media(
                 original,
                 file_name=path,
@@ -205,6 +163,7 @@ def register_thumbnail(app: Client):
                 progress_args=(status, time.time(), "Downloading")
             )
 
+            await safe_edit(status, f"⬆️ Uploading {i}/{total_files}")
             await app.send_document(
                 msg.chat.id,
                 document=path,
@@ -214,25 +173,20 @@ def register_thumbnail(app: Client):
                 progress_args=(status, time.time(), "Uploading")
             )
 
-            size = os.path.getsize(path)
-            THUMB_STATS[uid]["files"] += 1
-            THUMB_STATS[uid]["size"] += size
             os.remove(path)
 
-        THUMB_QUEUE[uid].clear()
-        ACTIVE_THUMB.pop(uid, None)
+        reset_thumb(uid)
         await status.edit_text("✅ Thumbnail applied to all files")
 
     # -------- STOP SESSION --------
     @app.on_message(filters.command("thumbstop"))
     async def thumbstop(_, msg):
         uid = msg.from_user.id
-        if uid not in THUMB_MODE:
-            return await msg.reply("⚠️ Thumbnail session not active")
+        THUMB_MODE.discard(uid)
+        reset_thumb(uid)
+        await msg.reply("❌ Thumbnail session ended")
 
-        await exit_thumb_mode(msg, uid)
-
-    # -------- CANCEL RUNNING --------
+    # -------- CANCEL --------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         uid = msg.from_user.id
