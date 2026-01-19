@@ -117,8 +117,8 @@ def register_thumbnail(app: Client):
         await msg.reply("✅ Thumbnail saved (will be reused)")
 
     # -------- QUEUE FILES --------
-    @app.on_message(filters.document | filters.video)
-    async def queue_files(_, msg):
+    @app.on_message(filters.document | filters.video, group=-1)
+async def queue_files(_, msg):
         uid = msg.from_user.id
         if uid not in THUMB_MODE:
             return
