@@ -26,7 +26,7 @@ MANUAL_NAMES = {}         # user_id -> list[str]
 AUTO_CONF = {}            # user_id -> dict
 
 # ==============================
-# PROGRESS BAR (FASTER)
+# PROGRESS BAR (FAST + SAFE)
 # ==============================
 async def progress_bar(current, total, message, start, label):
     if total == 0:
@@ -35,7 +35,6 @@ async def progress_bar(current, total, message, start, label):
     now = time.time()
     percent = int(current * 100 / total)
 
-    # 🔥 faster refresh (3s)
     last_edit = getattr(progress_bar, "last", 0)
     if now - last_edit < 3 and percent != 100:
         return
@@ -67,14 +66,14 @@ async def progress_bar(current, total, message, start, label):
         pass
 
 # ==============================
-# EPISODE DETECTION (IMPROVED)
+# EPISODE DETECTION (STRONG)
 # ==============================
 def extract_episode(name: str) -> int:
     patterns = [
-        r"[Ss]\d+[Ee](\d+)",
-        r"[Ee](\d+)",
-        r"[Ee]pisode\s*(\d+)",
-        r"\b(\d{1,3})\b"
+        r"[Ss]\d+\s*[Ee](\d+)",        # S01E05
+        r"\b[Ee]p?(\d{1,3})\b",        # E05 / EP5
+        r"\bEpisode\s*(\d{1,3})\b",
+        r"\b-\s*(\d{1,3})\b",          # - 12
     ]
     for p in patterns:
         m = re.search(p, name, re.IGNORECASE)
@@ -123,6 +122,7 @@ def register_handlers(app: Client):
         MODE.pop(uid, None)
         MANUAL_NAMES.pop(uid, None)
         AUTO_CONF.pop(uid, None)
+        reset_user(uid)
         await msg.reply("❌ Rename mode stopped")
 
     # ---------- MANUAL ----------
@@ -133,10 +133,7 @@ def register_handlers(app: Client):
             return await msg.reply("Use /renamestart first")
         MODE[uid] = "manual"
         MANUAL_NAMES[uid] = []
-        await msg.reply(
-            "✍️ Manual mode enabled\n"
-            "Send files, then send names one by one"
-        )
+        await msg.reply("✍️ Manual mode enabled\nSend file → send name")
 
     # ---------- AUTOMATIC ----------
     @app.on_message(filters.command("automatic"))
@@ -153,14 +150,17 @@ def register_handlers(app: Client):
         uid = msg.from_user.id
         if MODE.get(uid) != "auto":
             return
-        AUTO_CONF[uid] = {"base": msg.text.split(" ", 1)[1]}
+        text = msg.text.split(" ", 1)
+        if len(text) < 2:
+            return await msg.reply("Usage: /name Naruto S1 480p @tag")
+        AUTO_CONF[uid] = {"base": text[1]}
         await msg.reply("✅ Auto naming pattern saved")
 
     # ---------- CANCEL ----------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         ACTIVE_PROCESSES[msg.from_user.id] = False
-        await msg.reply("🛑 Cancelled")
+        await msg.reply("🛑 Cancel requested")
 
     # ---------- FILE QUEUE ----------
     @app.on_message(filters.document | filters.video)
@@ -195,7 +195,14 @@ def register_handlers(app: Client):
         files = user.get("files", [])
 
         if not files:
-            return await msg.reply("No files")
+            return await msg.reply("❌ No files queued")
+
+        if MODE.get(uid) == "manual":
+            if len(MANUAL_NAMES.get(uid, [])) != len(files):
+                return await msg.reply("❌ File count ≠ name count")
+
+        if MODE.get(uid) == "auto" and uid not in AUTO_CONF:
+            return await msg.reply("❌ Use /name first")
 
         ACTIVE_PROCESSES[uid] = True
         status = await msg.reply("🚀 Processing...")
@@ -232,7 +239,6 @@ def register_handlers(app: Client):
                 os.remove(path)
 
         finally:
-            # 🔥 CLEANUP (ADDED)
             ACTIVE_PROCESSES.pop(uid, None)
             SPEED_CACHE.clear()
 
