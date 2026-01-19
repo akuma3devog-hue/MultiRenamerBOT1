@@ -141,23 +141,27 @@ def register_handlers(app: Client):
         await msg.reply("🛑 Cancel requested")
 
     # ---------- FILE QUEUE (NO EXECUTION) ----------
-    @app.on_message(filters.document | filters.video)
-    async def queue_files(_, msg):
-        uid = msg.from_user.id
+@app.on_message(filters.document | filters.video)
+async def queue_files(_, msg):
+    uid = msg.from_user.id
 
-        # 🚫 HARD BLOCK during thumbnail session
-        if uid in THUMB_MODE:
-            return
+    # 🚫 BLOCK during thumbnail session
+    if uid in THUMB_MODE:
+        return
 
-        media = msg.document or msg.video
-        add_file(uid, {
-            "chat_id": msg.chat.id,
-            "message_id": msg.id,
-            "file_name": media.file_name or "file.mkv",
-            "size": media.file_size or 0
-        })
+    # 🚫 BLOCK if rename mode is NOT active
+    if uid not in RENAMEMODE:
+        return
 
-        await msg.reply("📦 File queued")
+    media = msg.document or msg.video
+    add_file(uid, {
+        "chat_id": msg.chat.id,
+        "message_id": msg.id,
+        "file_name": media.file_name or "file.mkv",
+        "size": media.file_size or 0
+    })
+
+    await msg.reply("📦 File queued")
 
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
