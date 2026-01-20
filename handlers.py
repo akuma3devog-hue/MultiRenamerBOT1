@@ -315,19 +315,23 @@ def register_handlers(app: Client):
                     progress=progress_bar,
                     progress_args=(status, time.time(), "Downloading")
                 )
-
                 os.replace(temp_path, final_path)
 
-                # -------- UPLOAD (SAFE) ----------
-                await app.send_document(
-                    chat_id=msg.chat.id,
-                    document=final_path,
-                    file_name=os.path.basename(final_path),
-                    force_document=True,
-                    supports_streaming=False,
-                    progress=progress_bar,
-                    progress_args=(status, time.time(), "Uploading")
+# 🔥 RESET progress state BEFORE upload
+progress_bar.last = 0
+
+# -------- UPLOAD (SAFE) ----------
+await app.send_document(
+    chat_id=msg.chat.id,
+    document=final_path,
+    file_name=os.path.basename(final_path),
+    force_document=True,
+    supports_streaming=False,
+    progress=progress_bar,
+    progress_args=(status, time.time(), "Uploading")
                 )
+
+                
 
                 os.remove(final_path)
 
