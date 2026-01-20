@@ -234,7 +234,7 @@ def register_handlers(app: Client):
         ACTIVE_PROCESSES[uid] = False
         await msg.reply("🛑 Cancelled")
 
-    # ---------- FILE QUEUE ----------
+     # ---------- FILE QUEUE ----------
     @app.on_message(filters.document | filters.video)
     async def queue(_, msg):
         uid = msg.from_user.id
@@ -253,6 +253,7 @@ def register_handlers(app: Client):
 
         await msg.reply("📂 File added")
 
+
     # ---------- MANUAL NAME ----------
     @app.on_message(filters.text & ~filters.regex(r"^/"))
     async def manual_name(_, msg):
@@ -262,65 +263,65 @@ def register_handlers(app: Client):
             MANUAL_NAMES[uid].append(msg.text)
             await msg.reply("✅ Name saved")
 
+
     # ---------- PROCESS ----------
-@app.on_message(filters.command("process"))
-async def process(_, msg):
-    uid = msg.from_user.id
-    touch(uid)
+    @app.on_message(filters.command("process"))
+    async def process(_, msg):
+        uid = msg.from_user.id
+        touch(uid)
 
-    user = get_user(uid)
-    files = user.get("files", [])
+        user = get_user(uid)
+        files = user.get("files", [])
 
-    if not files:
-        return await msg.reply("No files")
+        if not files:
+            return await msg.reply("No files")
 
-    if MODE.get(uid) == "manual" and len(MANUAL_NAMES[uid]) != len(files):
-        return await msg.reply("Names mismatch")
+        if MODE.get(uid) == "manual" and len(MANUAL_NAMES[uid]) != len(files):
+            return await msg.reply("Names mismatch")
 
-    ACTIVE_PROCESSES[uid] = True
-    status = await msg.reply("🚀 Processing")
+        ACTIVE_PROCESSES[uid] = True
+        status = await msg.reply("🚀 Processing")
 
-    try:
-        for i, f in enumerate(files):
-            if not ACTIVE_PROCESSES.get(uid):
-                await status.edit_text("🛑 Cancelled")
-                break
+        try:
+            for i, f in enumerate(files):
+                if not ACTIVE_PROCESSES.get(uid):
+                    await status.edit_text("🛑 Cancelled")
+                    break
 
-            # -------- filename ----------
-            if MODE[uid] == "manual":
-                filename = MANUAL_NAMES[uid][i]
-            else:
-                conf = AUTO_CONF[uid]
-                ep = extract_episode(f["file_name"])
-                ep = ep if ep is not None else conf["start_ep"] + i
+                # -------- filename ----------
+                if MODE[uid] == "manual":
+                    filename = MANUAL_NAMES[uid][i]
+                else:
+                    conf = AUTO_CONF[uid]
+                    ep = extract_episode(f["file_name"])
+                    ep = ep if ep is not None else conf["start_ep"] + i
 
-                filename = (
-                    f"{conf['base']} "
-                    f"S{conf['season']}E{ep:02d} "
-                    f"{conf['quality'].group(1) if conf['quality'] else ''} "
-                    f"{conf['tag'].group(0) if conf['tag'] else ''}"
-                ).strip()
+                    filename = (
+                        f"{conf['base']} "
+                        f"S{conf['season']}E{ep:02d} "
+                        f"{conf['quality'].group(1) if conf['quality'] else ''} "
+                        f"{conf['tag'].group(0) if conf['tag'] else ''}"
+                    ).strip()
 
-            original = await app.get_messages(f["chat_id"], f["message_id"])
+                original = await app.get_messages(f["chat_id"], f["message_id"])
 
-            temp_path = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
-            final_path = temp_path.replace(".part", "")
+                temp_path = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
+                final_path = temp_path.replace(".part", "")
 
-            # -------- DOWNLOAD (FULL) ----------
-            await app.download_media(
-                original,
-                file_name=temp_path,
-                progress=progress_bar,
-                progress_args=(status, time.time(), "Downloading")
-            )
+                # -------- DOWNLOAD ----------
+                await app.download_media(
+                    original,
+                    file_name=temp_path,
+                    progress=progress_bar,
+                    progress_args=(status, time.time(), "Downloading")
+                )
 
-            os.rename(temp_path, final_path)
+                os.replace(temp_path, final_path)
 
-            # -------- UPLOAD (FIXED) ----------
-            with open(final_path, "rb") as file:
+                # -------- UPLOAD (SAFE) ----------
                 await app.send_document(
                     chat_id=msg.chat.id,
-                    document=file,
+                    document=final_path,
                     file_name=os.path.basename(final_path),
                     force_document=True,
                     supports_streaming=False,
@@ -328,15 +329,21 @@ async def process(_, msg):
                     progress_args=(status, time.time(), "Uploading")
                 )
 
-            os.remove(final_path)
+                os.remove(final_path)
 
-    finally:
-        ACTIVE_PROCESSES.pop(uid, None)
-        SPEED_CACHE.clear()
-        reset_user(uid)
-        create_user(uid)
+        finally:
+            ACTIVE_PROCESSES.pop(uid, None)
+            SPEED_CACHE.clear()
+            reset_user(uid)
+            create_user(uid)
 
-    await status.edit_text("✅ Completed")
+        await status.edit_text("✅ Completed")
+
+    
+
+          
+
+    
 
 # =========================================================
 # AUTO CLEAN BACKGROUND TASK
