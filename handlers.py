@@ -232,9 +232,9 @@ def register_handlers(app: Client):
         uid = msg.from_user.id
         touch(uid)
         ACTIVE_PROCESSES[uid] = False
-        await msg.reply("🛑 Cancelled")
+        await msg.reply("🛑 Cancelled") 
 
-     # ---------- FILE QUEUE ----------
+    # ---------- FILE QUEUE ----------
     @app.on_message(filters.document | filters.video)
     async def queue(_, msg):
         uid = msg.from_user.id
@@ -303,7 +303,9 @@ def register_handlers(app: Client):
                         f"{conf['tag'].group(0) if conf['tag'] else ''}"
                     ).strip()
 
-                original = await app.get_messages(f["chat_id"], f["message_id"])
+                original = await app.get_messages(
+                    f["chat_id"], f["message_id"]
+                )
 
                 temp_path = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
                 final_path = temp_path.replace(".part", "")
@@ -315,23 +317,22 @@ def register_handlers(app: Client):
                     progress=progress_bar,
                     progress_args=(status, time.time(), "Downloading")
                 )
+
                 os.replace(temp_path, final_path)
 
-# 🔥 RESET progress state BEFORE upload
-progress_bar.last = 0
+                # 🔥 reset progress throttle BEFORE upload
+                progress_bar.last = 0
 
-# -------- UPLOAD (SAFE) ----------
-await app.send_document(
-    chat_id=msg.chat.id,
-    document=final_path,
-    file_name=os.path.basename(final_path),
-    force_document=True,
-    supports_streaming=False,
-    progress=progress_bar,
-    progress_args=(status, time.time(), "Uploading")
+                # -------- UPLOAD ----------
+                await app.send_document(
+                    chat_id=msg.chat.id,
+                    document=final_path,   # PATH, not open file
+                    file_name=os.path.basename(final_path),
+                    force_document=True,
+                    supports_streaming=False,
+                    progress=progress_bar,
+                    progress_args=(status, time.time(), "Uploading")
                 )
-
-                
 
                 os.remove(final_path)
 
@@ -342,6 +343,16 @@ await app.send_document(
             create_user(uid)
 
         await status.edit_text("✅ Completed")
+
+    
+
+
+     
+
+  
+
+
+    
 
     
 
