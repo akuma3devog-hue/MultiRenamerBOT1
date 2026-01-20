@@ -1,7 +1,8 @@
 import re
 import time
-import asyncio
 import os
+import asyncio
+import uuid
 
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
@@ -9,28 +10,22 @@ from pyrogram.errors import FloodWait
 from mongo import reset_user, create_user, add_file, get_user
 
 # =========================================================
-# PROCESS CONTROL
+# GLOBAL STATE
 # =========================================================
-ACTIVE_PROCESSES = {}        # user_id -> bool
-SPEED_CACHE = {}             # message_id -> (bytes, time)
+ACTIVE_PROCESSES = {}          # user_id -> bool
+SPEED_CACHE = {}               # message_id -> (bytes, time)
+
+RENAMEMODE = set()             # active users
+MODE = {}                      # user_id -> manual | auto
+
+MANUAL_NAMES = {}              # user_id -> list of names (order based)
+AUTO_CONF = {}                 # user_id -> rename config
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # =========================================================
-# RENAME SESSION STATE
-# =========================================================
-RENAMEMODE = set()           # users in rename mode
-MODE = {}                    # user_id -> "manual" | "auto"
-
-# MANUAL
-MANUAL_NAMES = {}            # user_id -> list of names (ordered)
-
-# AUTOMATIC
-AUTO_CONF = {}               # user_id -> {base, season, start_ep, quality, tag}
-
-# =========================================================
-# PROGRESS BAR
+# PROGRESS BAR (SAFE)
 # =========================================================
 async def progress_bar(current, total, message, start, label):
     if total == 0:
@@ -40,7 +35,7 @@ async def progress_bar(current, total, message, start, label):
     percent = int(current * 100 / total)
 
     last_edit = getattr(progress_bar, "last", 0)
-    if now - last_edit < 5 and percent != 100:
+    if now - last_edit < 3 and percent != 100:
         return
     progress_bar.last = now
 
@@ -48,9 +43,8 @@ async def progress_bar(current, total, message, start, label):
     speed = 0
     if last:
         lb, lt = last
-        dt = now - lt
-        if dt > 0:
-            speed = (current - lb) / dt
+        if now - lt > 0:
+            speed = (current - lb) / (now - lt)
 
     SPEED_CACHE[message.id] = (current, now)
 
@@ -70,7 +64,7 @@ async def progress_bar(current, total, message, start, label):
         pass
 
 # =========================================================
-# EPISODE DETECTION (SMART)
+# EPISODE DETECTION (ROBUST)
 # =========================================================
 def extract_episode(name: str) -> int:
     patterns = [
@@ -86,7 +80,7 @@ def extract_episode(name: str) -> int:
     return 0
 
 # =========================================================
-# REGISTER
+# REGISTER HANDLERS
 # =========================================================
 def register_handlers(app: Client):
 
@@ -97,8 +91,12 @@ def register_handlers(app: Client):
         create_user(msg.from_user.id)
         await msg.reply(
             "👋 Welcome\n\n"
-            "Use /renamestart to begin\n"
-            "Use /help to see commands"
+            "/renamestart – start rename mode\n"
+            "/manual – manual rename\n"
+            "/automatic – automatic rename\n"
+            "/process – execute\n"
+            "/renamestop – stop\n"
+            "/cancel – cancel process"
         )
 
     # ---------- RENAME START ----------
@@ -111,13 +109,7 @@ def register_handlers(app: Client):
         AUTO_CONF.pop(uid, None)
         reset_user(uid)
         create_user(uid)
-
-        await msg.reply(
-            "✏️ Rename mode enabled\n\n"
-            "Choose:\n"
-            "/manual\n"
-            "/automatic"
-        )
+        await msg.reply("✏️ Rename mode enabled\nChoose /manual or /automatic")
 
     # ---------- RENAME STOP ----------
     @app.on_message(filters.command("renamestop"))
@@ -127,10 +119,9 @@ def register_handlers(app: Client):
         MODE.pop(uid, None)
         MANUAL_NAMES.pop(uid, None)
         AUTO_CONF.pop(uid, None)
-
         await msg.reply("❌ Rename mode disabled")
 
-    # ---------- MANUAL MODE ----------
+    # ---------- MANUAL ----------
     @app.on_message(filters.command("manual"))
     async def manual(_, msg):
         uid = msg.from_user.id
@@ -139,13 +130,13 @@ def register_handlers(app: Client):
 
         MODE[uid] = "manual"
         MANUAL_NAMES[uid] = []
-
         await msg.reply(
-            "✍️ Manual mode enabled\n\n"
-            "Send files → then send names one by one"
+            "✍️ Manual mode enabled\n"
+            "Send file → then send name\n"
+            "Repeat for multiple files"
         )
 
-    # ---------- AUTOMATIC MODE ----------
+    # ---------- AUTOMATIC ----------
     @app.on_message(filters.command("automatic"))
     async def automatic(_, msg):
         uid = msg.from_user.id
@@ -154,48 +145,31 @@ def register_handlers(app: Client):
 
         MODE[uid] = "auto"
         await msg.reply(
-            "🤖 Automatic mode enabled\n\n"
+            "🤖 Automatic mode enabled\n"
             "Send files, then use:\n"
             "/rename Name S1E1 720p @tag"
         )
 
-    # ---------- AUTO RENAME CONFIG ----------
+    # ---------- AUTO CONFIG ----------
     @app.on_message(filters.command("rename"))
-    async def auto_rename(_, msg):
+    async def set_auto(_, msg):
         uid = msg.from_user.id
         if MODE.get(uid) != "auto":
             return
 
         text = msg.text.split(" ", 1)[1]
-
-        # example: Aoashi S1E1 720p @anifindX
-        base = re.split(r"S\d+E\d+", text, 1)[0].strip()
-        se = re.search(r"S(\d+)E(\d+)", text)
-        quality = re.search(r"(480p|720p|1080p)", text)
-        tag = re.search(r"@\S+", text)
-
-        if not se:
-            return await msg.reply("❌ Use format: Name S1E1")
-
-        AUTO_CONF[uid] = {
-            "base": base,
-            "season": int(se.group(1)),
-            "start_ep": int(se.group(2)),
-            "quality": quality.group(1) if quality else "",
-            "tag": tag.group(0) if tag else ""
-        }
-
-        await msg.reply("✅ Name pattern saved. Use /process")
+        AUTO_CONF[uid] = {"base": text}
+        await msg.reply("✅ Rename pattern saved\nUse /process")
 
     # ---------- CANCEL ----------
     @app.on_message(filters.command("cancel"))
     async def cancel(_, msg):
         ACTIVE_PROCESSES[msg.from_user.id] = False
-        await msg.reply("🛑 Process cancelled")
+        await msg.reply("🛑 Cancel requested")
 
     # ---------- FILE QUEUE ----------
     @app.on_message(filters.document | filters.video)
-    async def queue_files(_, msg):
+    async def queue(_, msg):
         uid = msg.from_user.id
         if uid not in RENAMEMODE:
             return
@@ -204,22 +178,22 @@ def register_handlers(app: Client):
         add_file(uid, {
             "chat_id": msg.chat.id,
             "message_id": msg.id,
-            "file_name": media.file_name or "file.mkv",
+            "file_name": media.file_name,
             "size": media.file_size or 0
         })
 
         if MODE.get(uid) == "manual":
-            await msg.reply("📂 File added. Please send name")
+            await msg.reply("📂 File added\nSend name now")
         else:
             await msg.reply(f"📂 Added: {media.file_name}")
 
     # ---------- MANUAL NAME INPUT ----------
-    @app.on_message(filters.text & ~filters.regex(r"^/"))
+    @app.on_message(filters.text & ~filters.command)
     async def manual_name(_, msg):
         uid = msg.from_user.id
         if MODE.get(uid) == "manual":
             MANUAL_NAMES.setdefault(uid, []).append(msg.text)
-            await msg.reply("✅ Name added. Use /process")
+            await msg.reply("✅ Name saved")
 
     # ---------- PROCESS ----------
     @app.on_message(filters.command("process"))
@@ -229,7 +203,7 @@ def register_handlers(app: Client):
         files = user.get("files", [])
 
         if not files:
-            return await msg.reply("❌ No files queued")
+            return await msg.reply("❌ No files")
 
         ACTIVE_PROCESSES[uid] = True
         status = await msg.reply("🚀 Processing...")
@@ -237,31 +211,32 @@ def register_handlers(app: Client):
         try:
             for i, f in enumerate(files):
                 if not ACTIVE_PROCESSES.get(uid):
-                    await status.edit_text("🛑 Process cancelled")
+                    await status.edit_text("🛑 Cancelled")
                     break
+
+                # SAFE unique temp filename
+                tmp_name = f"tmp_{uid}_{uuid.uuid4().hex}.mkv"
+                tmp_path = os.path.join(DOWNLOAD_DIR, tmp_name)
 
                 if MODE.get(uid) == "manual":
                     filename = MANUAL_NAMES[uid][i]
                 else:
                     ep = extract_episode(f["file_name"])
-                    conf = AUTO_CONF[uid]
-                    filename = (
-                        f"{conf['base']} "
-                        f"S{conf['season']}E{conf['start_ep'] + i:02d} "
-                        f"{conf['quality']} {conf['tag']}".strip()
-                    )
+                    base = AUTO_CONF[uid]["base"]
+                    filename = f"{base} E{ep or i+1:02d}"
 
                 original = await app.get_messages(f["chat_id"], f["message_id"])
+
                 path = await app.download_media(
                     original,
-                    file_name=f"{DOWNLOAD_DIR}/{filename}.mkv",
+                    file_name=tmp_path,
                     progress=progress_bar,
                     progress_args=(status, time.time(), "Downloading")
                 )
 
                 await app.send_document(
                     msg.chat.id,
-                    path,
+                    document=path,
                     file_name=f"{filename}.mkv",
                     progress=progress_bar,
                     progress_args=(status, time.time(), "Uploading")
@@ -272,14 +247,7 @@ def register_handlers(app: Client):
         finally:
             ACTIVE_PROCESSES.pop(uid, None)
             SPEED_CACHE.clear()
-
-            for f in os.listdir(DOWNLOAD_DIR):
-                try:
-                    os.remove(os.path.join(DOWNLOAD_DIR, f))
-                except:
-                    pass
-
             reset_user(uid)
             create_user(uid)
 
-        await status.edit_text("✅ Rename completed")
+        await status.edit_text("✅ Completed")
