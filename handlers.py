@@ -214,7 +214,7 @@ def register_handlers(app: Client):
             await msg.reply(f"📂 Added: {media.file_name}")
 
     # ---------- MANUAL NAME INPUT ----------
-    @app.on_message(filters.text & ~filters.command)
+    @app.on_message(filters.text & ~filters.regex(r"^/"))
     async def manual_name(_, msg):
         uid = msg.from_user.id
         if MODE.get(uid) == "manual":
