@@ -1,6 +1,8 @@
 import os
 import time
+import asyncio
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 
 from mongo import reset_user, create_user, get_user
 from handlers import (
@@ -55,12 +57,17 @@ def register_process(app: Client):
                         f"{conf['tag'].group(0) if conf['tag'] else ''}"
                     ).strip()
 
+                # 🔧 Ensure extension
+                original_name = f["file_name"]
+                ext = os.path.splitext(original_name)[1] or ".mkv"
+                safe_name = filename + ext
+
                 original = await app.get_messages(
                     f["chat_id"], f["message_id"]
                 )
 
-                temp_path = f"{DOWNLOAD_DIR}/{filename}.part"
-                final_path = f"{DOWNLOAD_DIR}/{filename}"
+                temp_path = os.path.join(DOWNLOAD_DIR, safe_name + ".part")
+                final_path = os.path.join(DOWNLOAD_DIR, safe_name)
 
                 # ---------- DOWNLOAD ----------
                 progress_bar.last = 0
@@ -79,9 +86,11 @@ def register_process(app: Client):
 
                 # ---------- UPLOAD ----------
                 progress_bar.last = 0
+                SPEED_CACHE.pop(status.id, None)  # 🔥 clear stale speed cache
+
                 await app.send_document(
                     chat_id=msg.chat.id,
-                    document=final_path,
+                    document=final_path,  # PATH not file object
                     file_name=os.path.basename(final_path),
                     force_document=True,
                     supports_streaming=False,
@@ -90,6 +99,7 @@ def register_process(app: Client):
                 )
 
                 os.remove(final_path)
+                await asyncio.sleep(1)  # Render stability
 
         finally:
             ACTIVE_PROCESSES.pop(uid, None)
