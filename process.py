@@ -1,107 +1,111 @@
-# process.py
 import os
 import time
-from pyrogram import Client, filters
+import re
+from pyrogram import filters
 
-from mongo import reset_user, create_user, get_user
-from handlers import (
-    ACTIVE_PROCESSES,
-    SPEED_CACHE,
-    MODE,
-    MANUAL_NAMES,
-    AUTO_CONF,
-    DOWNLOAD_DIR,
-    extract_episode,
-    progress_bar,
-    touch
-)
+# ===== IMPORTS FROM YOUR PROJECT =====
+from main import app, DOWNLOAD_DIR
+from database import get_user, reset_user, create_user, touch
+from progress import progress_bar
 
-def register_process(app: Client):
+# ===== GLOBAL RUNTIME STORES =====
+ACTIVE_PROCESSES = {}
+MODE = {}            # uid -> "manual" | "auto"
+MANUAL_NAMES = {}   # uid -> [list of names]
+AUTO_CONF = {}      # uid -> config dict
+SPEED_CACHE = {}    # used by progress_bar
 
-    # ---------- PROCESS ----------
-    @app.on_message(filters.command("process"))
-    async def process(_, msg):
-        uid = msg.from_user.id
-        touch(uid)
 
-        user = get_user(uid)
-        files = user.get("files", [])
+# ===== HELPER FUNCTIONS =====
 
-        if not files:
-            return await msg.reply("No files")
+def extract_episode(filename: str):
+    """
+    Try to extract episode number from filename like:
+    S01E02, E02, Ep02, Episode 02, etc.
+    """
+    patterns = [
+        r"[Ss]\d{1,2}[Ee](\d{1,3})",
+        r"\b[Ee][Pp]?\s?(\d{1,3})",
+        r"\bEpisode\s?(\d{1,3})",
+        r"\b(\d{1,3})\b"
+    ]
 
-        if MODE.get(uid) == "manual" and len(MANUAL_NAMES.get(uid, [])) != len(files):
-            return await msg.reply("Names mismatch")
+    for pat in patterns:
+        m = re.search(pat, filename)
+        if m:
+            try:
+                return int(m.group(1))
+            except:
+                pass
 
-        ACTIVE_PROCESSES[uid] = True
-        status = await msg.reply("🚀 Processing")
+    return None
 
-        try:
-            for i, f in enumerate(files):
-                if not ACTIVE_PROCESSES.get(uid):
-                    await status.edit_text("🛑 Cancelled")
-                    break
 
-                # ---------- filename ----------
-                if MODE[uid] == "manual":
-                    filename = MANUAL_NAMES[uid][i]
-                else:
-                    conf = AUTO_CONF[uid]
-                    ep = extract_episode(f["file_name"])
-                    ep = ep if ep is not None else conf["start_ep"] + i
+# ---------- PROCESS ----------
 
-                    filename = (
-                        f"{conf['base']} "
-                        f"S{conf['season']}E{ep:02d} "
-                        f"{conf['quality'].group(1) if conf['quality'] else ''} "
-                        f"{conf['tag'].group(0) if conf['tag'] else ''}"
-                    ).strip()
+@app.on_message(filters.command("process"))
+async def process(_, msg):
+    uid = msg.from_user.id
+    touch(uid)
 
-                original = await app.get_messages(
-                    f["chat_id"], f["message_id"]
-                )
+    user = get_user(uid)
+    files = user.get("files", [])
 
-                part = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
-                final = f"{DOWNLOAD_DIR}/{filename}.mkv"
+    if not files:
+        return await msg.reply("No files")
 
-                # 🔁 reset progress throttle
-                progress_bar.last = 0
+    if MODE.get(uid) == "manual" and len(MANUAL_NAMES.get(uid, [])) != len(files):
+        return await msg.reply("Names mismatch")
 
-                # ---------- DOWNLOAD ----------
-                await app.download_media(
-                    original,
-                    file_name=part,
-                    progress=progress_bar,
-                    progress_args=(status, time.time(), "Downloading")
-                )
+    ACTIVE_PROCESSES[uid] = True
+    status = await msg.reply("🚀 Processing")
 
-                # ✅ HARD CHECK: download really finished
-                if not os.path.exists(part) or os.path.getsize(part) == 0:
-                    await status.edit_text("❌ Download failed or incomplete")
-                    break
+    try:
+        for i, f in enumerate(files):
+            if not ACTIVE_PROCESSES.get(uid):
+                break
 
-                os.replace(part, final)
+            if MODE.get(uid) == "manual":
+                filename = MANUAL_NAMES[uid][i]
+            else:
+                conf = AUTO_CONF[uid]
+                ep = extract_episode(f["file_name"])
+                ep = ep if ep is not None else conf["start_ep"] + i
 
-                # 🔁 reset progress throttle again
-                progress_bar.last = 0
+                filename = (
+                    f"{conf['base']} "
+                    f"S{conf['season']}E{ep:02d} "
+                    f"{conf['quality'].group(1) if conf['quality'] else ''} "
+                    f"{conf['tag'].group(0) if conf['tag'] else ''}"
+                ).strip()
 
-                # ---------- UPLOAD ----------
-                await app.send_document(
-                    chat_id=msg.chat.id,
-                    document=final,   # PASS PATH (not file object)
-                    file_name=os.path.basename(final),
-                    force_document=True,
-                    supports_streaming=False,
-                    progress=progress_bar,
-                    progress_args=(status, time.time(), "Uploading")
-                )
+            original = await app.get_messages(f["chat_id"], f["message_id"])
+            part = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
+            final = part.replace(".part", "")
 
-                os.remove(final)
+            await app.download_media(
+                original,
+                file_name=part,
+                progress=progress_bar,
+                progress_args=(status, time.time(), "Downloading")
+            )
 
-        finally:
-            ACTIVE_PROCESSES.pop(uid, None)
-            SPEED_CACHE.clear()
-            reset_user(uid)
-            create_user(uid)
+            os.rename(part, final)
 
-        await status.edit_text("✅ Completed")
+            await app.send_document(
+                msg.chat.id,
+                final,
+                file_name=os.path.basename(final),
+                progress=progress_bar,
+                progress_args=(status, time.time(), "Uploading")
+            )
+
+            os.remove(final)
+
+    finally:
+        ACTIVE_PROCESSES.pop(uid, None)
+        SPEED_CACHE.clear()
+        reset_user(uid)
+        create_user(uid)
+
+    await status.edit_text("✅ Completed")
