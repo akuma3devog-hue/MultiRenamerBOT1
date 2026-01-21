@@ -57,7 +57,6 @@ def register_process(app: Client):
                         f"{conf['tag'].group(0) if conf['tag'] else ''}"
                     ).strip()
 
-                # 🔧 Ensure extension
                 original_name = f["file_name"]
                 ext = os.path.splitext(original_name)[1] or ".mkv"
                 safe_name = filename + ext
@@ -84,22 +83,37 @@ def register_process(app: Client):
 
                 os.replace(temp_path, final_path)
 
-                # ---------- UPLOAD ----------
+                # 🔥 FORCE EVENT LOOP RELEASE
+                await status.edit_text("📤 Preparing upload…")
+                await asyncio.sleep(1.5)
+                SPEED_CACHE.clear()
                 progress_bar.last = 0
-                SPEED_CACHE.pop(status.id, None)  # 🔥 clear stale speed cache
 
-                await app.send_document(
-                    chat_id=msg.chat.id,
-                    document=final_path,  # PATH not file object
-                    file_name=os.path.basename(final_path),
-                    force_document=True,
-                    supports_streaming=False,
-                    progress=progress_bar,
-                    progress_args=(status, time.time(), "Uploading")
-                )
+                # ---------- UPLOAD ----------
+                try:
+                    await app.send_document(
+                        chat_id=msg.chat.id,
+                        document=final_path,
+                        file_name=os.path.basename(final_path),
+                        force_document=True,
+                        supports_streaming=False,
+                        progress=progress_bar,
+                        progress_args=(status, time.time(), "Uploading")
+                    )
+                except FloodWait as e:
+                    await asyncio.sleep(e.value)
+                    await app.send_document(
+                        chat_id=msg.chat.id,
+                        document=final_path,
+                        file_name=os.path.basename(final_path),
+                        force_document=True,
+                        supports_streaming=False,
+                        progress=progress_bar,
+                        progress_args=(status, time.time(), "Uploading")
+                    )
 
                 os.remove(final_path)
-                await asyncio.sleep(1)  # Render stability
+                await asyncio.sleep(1)
 
         finally:
             ACTIVE_PROCESSES.pop(uid, None)
