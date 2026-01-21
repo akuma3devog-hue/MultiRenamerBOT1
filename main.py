@@ -4,7 +4,6 @@ from flask import Flask
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, PORT
 from handlers import register_handlers
-from process import register_process   # 👈 ADD
 
 web = Flask(__name__)
 
@@ -25,7 +24,6 @@ app = Client(
 )
 
 register_handlers(app)
-register_process(app)   # 👈 ADD
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
