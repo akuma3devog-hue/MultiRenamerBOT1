@@ -1,6 +1,6 @@
-# process.py
 import os
 import time
+import asyncio
 from pyrogram import Client, filters
 
 from mongo import reset_user, create_user, get_user
@@ -27,10 +27,10 @@ def register_process(app: Client):
         files = user.get("files", [])
 
         if not files:
-            return await msg.reply("No files")
+            return await msg.reply("❌ No files")
 
         if MODE.get(uid) == "manual" and len(MANUAL_NAMES.get(uid, [])) != len(files):
-            return await msg.reply("Names mismatch")
+            return await msg.reply("❌ Names mismatch")
 
         ACTIVE_PROCESSES[uid] = True
         status = await msg.reply("🚀 Processing")
@@ -41,7 +41,7 @@ def register_process(app: Client):
                     await status.edit_text("🛑 Cancelled")
                     break
 
-                # -------- filename ----------
+                # ---------- filename ----------
                 if MODE.get(uid) == "manual":
                     filename = MANUAL_NAMES[uid][i]
                 else:
@@ -56,13 +56,17 @@ def register_process(app: Client):
                         f"{conf['tag'].group(0) if conf['tag'] else ''}"
                     ).strip()
 
-                original = await app.get_messages(f["chat_id"], f["message_id"])
+                original = await app.get_messages(
+                    f["chat_id"], f["message_id"]
+                )
 
                 part = f"{DOWNLOAD_DIR}/{filename}.mkv.part"
                 final = part.replace(".part", "")
 
-                # -------- DOWNLOAD ----------
+                # ---------- DOWNLOAD ----------
                 progress_bar.last = 0
+                SPEED_CACHE.clear()
+
                 await app.download_media(
                     original,
                     file_name=part,
@@ -78,7 +82,7 @@ def register_process(app: Client):
 
                 await asyncio.sleep(1)  # Render FS sync fix
 
-                # -------- UPLOAD ----------
+                # ---------- UPLOAD ----------
                 progress_bar.last = 0
                 SPEED_CACHE.clear()
 
