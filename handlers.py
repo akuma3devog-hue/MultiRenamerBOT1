@@ -305,3 +305,8 @@ async def auto_cleanup_task(app: Client):
                 WARNED.discard(uid)
 
         await asyncio.sleep(300)
+# ===== EXPORT SHARED STATE FOR process.py =====
+__all__ = [
+    "ACTIVE_PROCESSES", "SPEED_CACHE", "MODE", "MANUAL_NAMES", "AUTO_CONF",
+    "DOWNLOAD_DIR", "extract_episode", "progress_bar", "touch"
+]
